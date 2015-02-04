@@ -11,62 +11,20 @@ import os
 import sys
 import re
 
-'''
-Example AST:
-TranslationUnitDecl 0x36b9250 <<invalid sloc>> <invalid sloc>
-|-TypedefDecl 0x36b9750 <<invalid sloc>> <invalid sloc> implicit __int128_t '__int128'
-|-TypedefDecl 0x36b97b0 <<invalid sloc>> <invalid sloc> implicit __uint128_t 'unsigned __int128'
-|-TypedefDecl 0x36b9b00 <<invalid sloc>> <invalid sloc> implicit __builtin_va_list '__va_list_tag [1]'
-|-FunctionDecl 0x36b9cd0 <c_if_and_for.c:1:1, line:5:1> line:1:6 foo 'void (int *, int *)'
-| |-ParmVarDecl 0x36b9b90 <col:10, col:15> col:15 used a 'int *'
-| |-ParmVarDecl 0x36b9c00 <col:18, col:23> col:23 used b 'int *'
-| `-CompoundStmt 0x36f6a50 <col:26, line:5:1>
-|   `-IfStmt 0x36b9f58 <line:2:3, line:4:3>
-|     |-<<<NULL>>>
-|     |-BinaryOperator 0x36b9e40 <line:2:7, col:14> 'int' '>'
-|     | |-ImplicitCastExpr 0x36b9e28 <col:7, col:10> 'int' <LValueToRValue>
-|     | | `-ArraySubscriptExpr 0x36b9de0 <col:7, col:10> 'int' lvalue
-|     | |   |-ImplicitCastExpr 0x36b9dc8 <col:7> 'int *' <LValueToRValue>
-|     | |   | `-DeclRefExpr 0x36b9d80 <col:7> 'int *' lvalue ParmVar 0x36b9b90 'a' 'int *'
-|     | |   `-IntegerLiteral 0x36b9da8 <col:9> 'int' 0
-|     | `-IntegerLiteral 0x36b9e08 <col:14> 'int' 1
-|     |-CompoundStmt 0x36b9f38 <col:17, line:4:3>
-|     | `-BinaryOperator 0x36b9f10 <line:3:5, col:12> 'int' '='
-|     |   |-ArraySubscriptExpr 0x36b9ec8 <col:5, col:8> 'int' lvalue
-|     |   | |-ImplicitCastExpr 0x36b9eb0 <col:5> 'int *' <LValueToRValue>
-|     |   | | `-DeclRefExpr 0x36b9e68 <col:5> 'int *' lvalue ParmVar 0x36b9c00 'b' 'int *'
-|     |   | `-IntegerLiteral 0x36b9e90 <col:7> 'int' 0
-|     |   `-IntegerLiteral 0x36b9ef0 <col:12> 'int' 2
-|     `-<<<NULL>>>
-|-FunctionDecl 0x36f6bc0 <line:7:1, col:26> col:6 bar 'void (float, float)'
-| |-ParmVarDecl 0x36f6a80 <col:10, col:16> col:16 x 'float'
-| `-ParmVarDecl 0x36f6af0 <col:19, col:25> col:25 y 'float'
-`-FunctionDecl 0x36f6dd0 <line:9:1, line:13:1> line:9:6 bang 'void (int *, int)'
-  |-ParmVarDecl 0x36f6c90 <col:11, col:16> col:16 used a 'int *'
-  |-ParmVarDecl 0x36f6d00 <col:19, col:23> col:23 used v 'int'
-  `-CompoundStmt 0x36f7190 <col:26, line:13:1>
-    `-ForStmt 0x36f7150 <line:10:5, line:12:5>
-      |-DeclStmt 0x36f6f08 <line:10:10, col:19>
-      | `-VarDecl 0x36f6e90 <col:10, col:18> col:14 used i 'int' cinit
-      |   `-IntegerLiteral 0x36f6ee8 <col:18> 'int' 0
-      |-<<<NULL>>>
-      |-BinaryOperator 0x36f6fa0 <col:21, col:25> 'int' '<'
-      | |-ImplicitCastExpr 0x36f6f70 <col:21> 'int' <LValueToRValue>
-      | | `-DeclRefExpr 0x36f6f20 <col:21> 'int' lvalue Var 0x36f6e90 'i' 'int'
-      | `-ImplicitCastExpr 0x36f6f88 <col:25> 'int' <LValueToRValue>
-      |   `-DeclRefExpr 0x36f6f48 <col:25> 'int' lvalue ParmVar 0x36f6d00 'v' 'int'
-      |-UnaryOperator 0x36f6ff0 <col:28, col:30> 'int' prefix '++'
-      | `-DeclRefExpr 0x36f6fc8 <col:30> 'int' lvalue Var 0x36f6e90 'i' 'int'
-      `-CompoundStmt 0x36f7130 <col:33, line:12:5>
-        `-CompoundAssignOperator 0x36f70f8 <line:11:9, col:17> 'int' '-=' ComputeLHSTy='int' ComputeResultTy='int'
-          |-ArraySubscriptExpr 0x36f7090 <col:9, col:12> 'int' lvalue
-          | |-ImplicitCastExpr 0x36f7060 <col:9> 'int *' <LValueToRValue>
-          | | `-DeclRefExpr 0x36f7010 <col:9> 'int *' lvalue ParmVar 0x36f6c90 'a' 'int *'
-          | `-ImplicitCastExpr 0x36f7078 <col:11> 'int' <LValueToRValue>
-          |   `-DeclRefExpr 0x36f7038 <col:11> 'int' lvalue Var 0x36f6e90 'i' 'int'
-          `-ImplicitCastExpr 0x36f70e0 <col:17> 'int' <LValueToRValue>
-            `-DeclRefExpr 0x36f70b8 <col:17> 'int' lvalue Var 0x36f6e90 'i' 'int'
-'''
+class SourceExtent(object):
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+
+class SourceLocation(object):
+    def __init__(self, filename, line, col, valid):
+        self.filename = filename
+        self.line = line
+        self.col = col
+        self.valid = valid
+
+    def __str__(self):
+        return str(self.filename) + ':' + str(self.line) + ':' + str(self.col) + ':' + str(self.valid)
 
 class ASTNode(object):
 
@@ -74,39 +32,303 @@ class ASTNode(object):
         for key in opts.keys():
             self.__dict__[key] = opts[key]
         self.children = []
+        self._extent = None
 
-class ParmVarDecl(ASTNode): pass
+    def printParents(self):
+        stack = []
+        parent = self.parent
+        while parent.kind != 'root':
+            stack.append(parent)
+            parent = parent.parent
+        stack.reverse()
+
+        for parent in stack:
+            print 'parent line', parent.rawline
+        print 'self line', self.rawline
+
+    def getVarName(self):
+        varNames = filter(lambda x: x[0] == '[0;1;36', self.lineByColor)
+        if len(varNames) > 0:
+            varName = varNames[0][1]
+            varName = varName.strip()
+        else:
+            varName = None
+        return varName
+
+    def getVarType(self):
+        varType = filter(lambda x: x[0] == '[0;32', self.lineByColor)[0][1]
+        return varType
+
+    def parseLocation(self, location, askParent):
+        match = re.search('^col:(?P<col>[0-9]+)$', location)
+        match2 = re.search('^((?P<fname>[^:]+):)?(?P<line>[0-9]+):(?P<col>[0-9]+)$', location)
+        match3 = re.search('<invalid sloc', location)
+        if match:
+            filename = None
+            line = None
+            if askParent:
+                extent = self.parent.getExtent()
+                #parent = self.parent
+                #while parent.kind != 'root':
+                #    print 'parent line', parent.rawline
+                #    parent = parent.parent
+                filename = extent.start.filename #or extent.end.filename
+                line = extent.start.line #or extent.end.line
+            col = int(match.group('col')) - 1    # 0 indexed
+            valid = True
+        elif match2:
+            filename = match2.group('fname')
+            if filename == 'line':
+                if askParent:
+                    filename = self.parent.getExtent().start.filename
+                else:
+                    filename = None
+            line = int(match2.group('line')) - 1 # 0 indexed
+            col = int(match2.group('col')) - 1   # 0 indexed
+            valid = True
+        elif match3:
+            filename = None
+            line = None
+            col = None
+            valid = False
+        else:
+            assert False, location
+        return SourceLocation(filename, line, col, valid)
+
+    def getExtent(self):
+        if self._extent:
+            return self._extent
+        match = re.search(r'^<(.*), (.*)>$', self.location)
+        match2 = re.search(r'^<(.*)>$', self.location)
+        if match or match2:
+            if match:
+                startLocation = match.group(1)
+                start = self.parseLocation(startLocation, True)
+                endLocation = match.group(2)
+                end = self.parseLocation(endLocation, False)
+            elif match2:
+                startLocation = match2.group(1)
+                start = self.parseLocation(startLocation, True)
+                end = start
+            if end.filename == None:
+                end.filename = start.filename
+            if end.line == None:
+                end.line = start.line
+            self._extent =  SourceExtent(start, end)
+            return self._extent
+        else:
+            assert False, self.line + ", LOCATION: " + self.location
+
+    def getLineLocation(self):
+        match = re.search('<line:([0-9]+)', self.location)
+        if match:
+            return int(match.group(1))
+        else:
+            return None
+
+    def rewrite(self, replacer):
+        pass
+
+class ArraySubscriptExpr(ASTNode): pass
+class AsmLabelAttr(ASTNode): pass
+class BinaryOperator(ASTNode): pass
+class BreakStmt(ASTNode): pass
+class CallExpr(ASTNode): pass
+class CaseStmt(ASTNode): pass
+class CharacterLiteral(ASTNode): pass
+class CompoundAssignOperator(ASTNode): pass
+class CompoundStmt(ASTNode): pass
+class ConditionalOperator(ASTNode): pass
+class ConstAttr(ASTNode): pass
+class ContinueStmt(ASTNode): pass
+class CStyleCastExpr(ASTNode): pass
+class DeclRefExpr(ASTNode): pass
+class DeclStmt(ASTNode): pass
+class DefaultStmt(ASTNode): pass
+class DeprecatedAttr(ASTNode): pass
+class DoStmt(ASTNode): pass
+class EmptyDecl(ASTNode): pass
+class EnumConstantDecl(ASTNode): pass
+class EnumDecl(ASTNode): pass
+class FieldDecl(ASTNode): pass
+class Field(ASTNode): pass
+class FloatingLiteral(ASTNode): pass
+class FormatAttr(ASTNode): pass
+class ForStmt(ASTNode): pass
+class FullComment(ASTNode): pass
+
+class FunctionDecl(ASTNode):
+    def isProtoType(self):
+        return all(child.kind != 'CompoundStmt' for child in self.children)
+
+    def rewrite(self, replacer):
+        ext = self.getExtent()
+        varName = self.getVarName()
+        varType = self.getVarType()
+        if varName != None:
+            try:
+                source = replacer.getSource(ext.start, ext.end)
+            except:
+                source = None
+            if source != None:
+                funStart = re.search(r'\b%s\b' % varName, source)
+                if funStart:
+                    #self.printParents()
+                    #print ext.start, ext.end, varName, varType, source
+                    start = replacer.lineColToPos(ext.start.line, ext.start.col)
+                    end = start + funStart.start()
+                    # remove function type and static etc
+                    replacer.replace(start, end, 'function ')
+
+
+class GNUInlineAttr(ASTNode): pass
+class GotoStmt(ASTNode): pass
+class IfStmt(ASTNode): pass
+class ImplicitCastExpr(ASTNode): pass
+class ImplicitValueInitExpr(ASTNode): pass
+class IndirectFieldDecl(ASTNode): pass
+class InitListExpr(ASTNode): pass
+class IntegerLiteral(ASTNode): pass
+class LabelStmt(ASTNode): pass
+class MallocAttr(ASTNode): pass
+class MemberExpr(ASTNode): pass
+class ModeAttr(ASTNode): pass
+class NonNullAttr(ASTNode): pass
+class NoThrowAttr(ASTNode): pass
+class NullStmt(ASTNode): pass
+class OffsetOfExpr(ASTNode): pass
+class ParagraphComment(ASTNode): pass
+class ParenExpr(ASTNode): pass
+
+class ParmVarDecl(ASTNode):
+    def rewrite(self, replacer):
+        ext = self.getExtent()
+        varName = self.getVarName()
+        varType = self.getVarType()
+        try:
+            source = replacer.getSource(ext.start, ext.end)
+        except:
+            #self.printParents()
+            #print ext.start, ext.end, varName, varType
+            #print 'could not get source'
+            source = None
+        if source != None:
+            #self.printParents()
+            #print ext.start, ext.end, varName, varType
+            varTypeS = re.sub(r"['\s]*", '', varType).split(':')[0]
+            sourceS = re.sub(r'\s*', '', source)
+            if sourceS != varTypeS:
+                pass
+                #print 'incorrect getSource', sourceS, varTypeS
+            else:
+                # ParmDecl just includes type.
+                # Erase type for JS.
+                replacer.replace(ext.start, ext.end, '')
+
+class PredefinedExpr(ASTNode): pass
+class PureAttr(ASTNode): pass
+class RecordDecl(ASTNode): pass
+class ReturnStmt(ASTNode): pass
+class ReturnsTwiceAttr(ASTNode): pass
+class SentinelAttr(ASTNode): pass
+class StmtExpr(ASTNode): pass
+class StringLiteral(ASTNode): pass
+class SwitchStmt(ASTNode): pass
+class TextComment(ASTNode): pass
+class TranslationUnitDecl(ASTNode): pass
+class TransparentUnionAttr(ASTNode): pass
+class TypedefDecl(ASTNode): pass
+class UnaryExprOrTypeTraitExpr(ASTNode): pass
+class UnaryOperator(ASTNode): pass
+class UnusedAttr(ASTNode): pass
+class VAArgExpr(ASTNode): pass
+
+class VarDecl(ASTNode):
+    def rewrite(self, replacer):
+
+        ext = self.getExtent()
+        varName = self.getVarName()
+        varType = self.getVarType()
+        if varName != None:
+            end2 = self.parseLocation(self.rest.strip().split(' ')[0], False)
+            if end2.filename == None:
+                end2.filename = ext.start.filename
+            if end2.line == None:
+                end2.line = ext.start.line
+            for endLoc in [ext.end, end2]:
+                try:
+                    # sometimes the VarDecl ends where the var name starts, sometimes not
+                    # add len(varName) for good measure
+                    start = replacer.lineColToPos(ext.start.line, ext.start.col)
+                    end = replacer.lineColToPos(endLoc.line, endLoc.col) + len(varName)
+                    source = replacer.getSource(start, end)
+                except IndexError, e:
+                    source = None
+                if source != None:
+                    self.printParents()
+                    print ext.start, ext.end, end2, varName, varType, source
+                    varStart = re.search(r'\b(?P<word>%s)\b' % varName, source)
+                    print 'varStart', varStart
+                    if varStart:
+                        start = replacer.lineColToPos(ext.start.line, ext.start.col)
+                        if start in replacer.replacedVarStarts:
+                            print 'already replaced type for ', varName
+                        else:
+                            replacer.replacedVarStarts[start] = True
+                            end = start + varStart.start('word')
+                            # Declare as var instead of with type
+                            replacer.replace(start, end, 'var ')
+                            print 'replacing with var: ', replacer.getSource(start, end)
+                    print
 
 
 
-def parse(data):
+
+class WarnUnusedResultAttr(ASTNode): pass
+class WhileStmt(ASTNode): pass
+
+def parseAST(data):
     'parse AST'
-    data = re.sub(r'\033\[[^m]+m', '', data)
-    parents = [ASTNode({'kind': 'root'})]
+    #data = re.sub(r'\033\[[^m]+m', '', data)
+    parents = [ASTNode({
+        'kind': 'root',
+        'prefix': '',
+        'location': 0
+        })]
     oldPrefix = ''
-    firstLine = True
-    for line in data.splitlines():
-        if '<<<NULL>>>' in line:
+    prevLine = ''
+    for rawline in data.splitlines():
+        if '<<<NULL>>>' in rawline:
             continue
-        match = re.search('(?P<prefix>[- |`]*)(?P<kind>[A-Za-z]*) (?P<ptr>[^ ]*) (?P<location><[^>]*>)(?P<rest>.*)', line)
+        # Not sure what this is used for exactly, seems to be array init
+        if 'array filler' in rawline:
+            continue
+        line = re.sub(r'\033\[[^m]+m', '', rawline)
+        lineByColor = re.findall(r'[\033](?P<color>\[[^m]+)m(?P<value>[^\033]*)', rawline)
+        #print lineByColor
+        match = re.search('(?P<prefix>[- |`]*)(?P<kind>[A-Za-z]*) (?P<ptr>[^ ]*) (prev (?P<prev>[^ ]* ))?(?P<location>(<[^>]+>)|([^ ]+))(?P<rest>.*)', line)
+        #if not match:
+        #    print 'NO MATCH'
+        #    print line
         d = {}
         for group in 'prefix', 'kind', 'ptr', 'rest', 'location':
             d[group] = match.group(group)
-        ast = ASTNode(d)
-        #ast = globals()[d['kind']]()
+        kind = d['kind']
+        if kind in globals():
+            ast = globals()[kind](d)
+        else:
+            print >>sys.stderr, 'unknown kind', kind
+            print >>sys.stderr, 'LINE', line
+            ast = ASTNode(d)
+        ast.rawline = rawline
+        ast.line = line
+        ast.lineByColor = lineByColor
+
         assert isinstance(ast, ASTNode)
         #print len(ast.prefix), ast.kind, ast.ptr, ast.rest
 
         prefix = ast.prefix
-        if len(prefix) < len(oldPrefix):
-            for i in range((len(oldPrefix) - len(prefix)) / 2 + 1):
-                #print 'pop', parents[-1].kind
-                parents.pop()
-        elif len(prefix) > len(oldPrefix):
-            assert len(prefix) == len(oldPrefix) + 2
-            pass
-        elif len(prefix) == len(oldPrefix) and not firstLine:
-            #print 'pop', parents[-1].kind
+        while len(parents[-1].prefix) >= len(prefix) and parents[-1].kind != 'root':
             parents.pop()
         oldPrefix = prefix
 
@@ -115,7 +337,7 @@ def parse(data):
         #print ast.parent.kind.ljust(30), line
         parents.append(ast)
         #print 'push', ast.kind
-        firstLine = False
+        prevLine = line
     return parents[0]
 
 class PrintKinds(object):
@@ -136,7 +358,7 @@ class PrintKinds(object):
         kinds = self.getKinds(self.ast).keys()
         kinds.sort()
         for kind in kinds:
-            print 'class ' + kind + '(object): pass'
+            print 'class ' + kind + '(ASTNode): pass'
 
 class Replacer(object):
 
@@ -156,21 +378,36 @@ class Replacer(object):
         self.chars = chars
         self.lineMap = lineMap
         self.lines = source.splitlines()
+        # state
+        self.replacedVarStarts = {}
 
     def lineColToPos(self, line, col):
-        return self.lineMap[line, col]
+        return self.lineMap[line][col]
 
     def insert(self, start, text):
         return self.replace(start, start, text)
 
+    def getSource(self, start, end):
+        if isinstance(start, SourceLocation):
+            start = self.lineColToPos(start.line, start.col)
+        if isinstance(end, SourceLocation):
+            end = self.lineColToPos(end.line, end.col)
+        if start <= len(self.chars) and end <= len(self.chars):
+            return self.source[start:end]
+        else:
+            raise IndexError("index out of range")
+
     def replace(self, start, end, text):
         'replace from start to end, not inclusive end'
-        start = self.lineColToPos(start)
-        end = self.lineColToPos(end)
+        if isinstance(start, SourceLocation):
+            start = self.lineColToPos(start.line, start.col)
+        if isinstance(end, SourceLocation):
+            end = self.lineColToPos(end.line, end.col)
+        #print len(self.chars), start, end
         for i in range(start, end):
+            assert self.chars[i] != '', 'overwrite not supported'
             self.chars[i] = ''
         self.chars[start] = text
-        self.chars[start:end] = text
 
     def __str__(self):
         return ''.join(self.chars)
@@ -184,6 +421,7 @@ class Visitor(object):
     def visit(self, node=None):
         if node == None:
             node = self.ast
+        node.rewrite(self.replacer)
         for child in node.children:
             self.visit(child)
 
@@ -191,15 +429,19 @@ def main():
     'entry point'
     sourceFileName = sys.argv[1]
     astFileName = sys.argv[2]
+    outFileName = sys.argv[3]
     sourceData = file(sourceFileName).read()
     astData = file(astFileName).read()
-    ast = parse(astData)
-    printKinds = PrintKinds(ast)
-    printKinds.printKinds()
+    ast = parseAST(astData)
+    #printKinds = PrintKinds(ast)
+    #printKinds.printKinds()
     replacer = Replacer(sourceData)
+    replacer.fileName = sourceFileName
     visitor = Visitor(ast, replacer)
     visitor.visit()
-    #print str(replacer)
+    fd = file(outFileName, 'w')
+    print >>fd, str(replacer)
+    fd.close()
 
 if __name__ == '__main__':
     main()
