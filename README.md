@@ -17,11 +17,14 @@ at the expense of performance.
 c2js-compiler is specifically targeted at porting Vim to the web, and has so
 far only been tried on eval.c in the Vim src directory. The resulting JS file
 loads the definitions in nodejs without errors, but I haven't tried running
-anything in a Web browser yet. I also need to implement a filesystem, probably
-borrow from Emscripten or something.
+anything in a Web browser yet.
 
 # TODO
  - Pointer arithmetic. Array pointers.
  - Goto statements and labels.
  - JavaScript to C source maps.
- - Resolve variable type issues, JavaScript string versus char* etc.
+ - Resolve variable type issues, JavaScript string versus char\* etc.
+ -
+ - Compile musl (light libc) and get libraries from Emscripten.
+ - Implement filesystem (can probably borrow from Emscripten).
+ - Compile simple tool and try to run.
