@@ -20,6 +20,22 @@ void bang(int* a, int v) {
         a[i] -= i;
         *(a + i) -= i;
     }
+    int i;
+    while (i < 10) {
+      i++;
+    }
+    switch (i) {
+      case 0:
+        i--;
+        break;
+      case 1:
+      case 2:
+        i++;
+        break;
+      default:
+        i++;
+        break;
+    }
 }
 
 int main(int argc, char** argv) {

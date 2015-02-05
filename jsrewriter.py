@@ -84,7 +84,9 @@ class ASTNode(object):
     def getChildValues(self, sep=''):
         s = ''
         for child in self.children:
-            s += child.getValue() + sep
+            value = child.getValue()
+            assert value != None, child.kind
+            s += value + sep
         return s
 
     def getValue(self):
@@ -97,6 +99,7 @@ class ASTNode(object):
             varName = varNames[0][1]
             varName = varName.strip()
             varName = varName.strip("'")
+            assert not varName in self.root.builtins
         else:
             varName = None
         return varName
@@ -182,14 +185,35 @@ class ASTRootNode(ASTNode):
         self.prefix = ''
         self.location = 0
         self.children = []
+        self.builtins = []
+        self.externs = {}
 
     def getValue(self):
         return self.getChildValues()
 
 class ASTNullNode(ASTNode):
 
+    # too lazy to define __init__ and call super
+    def init(self):
+        self.kind = None
+
     def getValue(self):
         return ''
+
+class ASTArrayFiller(ASTNode):
+
+    # too lazy to define __init__ and call super
+    def init(self):
+        self.kind = "ASTArrayFiller"
+        self.children = []
+
+class ASTAttr(ASTNode):
+    "usually we don't are about it"
+
+    def getValue(self):
+        assert len(self.children) == 0
+        return ''
+
 
 class ArraySubscriptExpr(ASTNode):
 
@@ -199,7 +223,7 @@ class ArraySubscriptExpr(ASTNode):
         val2 = c2.getValue()
         return '%s[%s]' % (val1, val2)
 
-class AsmLabelAttr(ASTNode): pass
+class AsmLabelAttr(ASTAttr): pass
 
 class BinaryOperator(ASTNode):
 
@@ -219,13 +243,31 @@ class CallExpr(ASTNode):
     def getValue(self):
         fexpr = self.children[0]
         values = self.children[1:]
-        fexpr = fexpr.getValue()
-        values = [x.getValue() for x in values]
-        s = '%s(%s)' % (fexpr, ', '.join(values))
-        #print 'call ', s
+        if (fexpr.getVarName() == 'alloc' and
+            fexpr.parent.kind == "CStyleCastExpr"):
+            varType = fexpr.parent.getVarType().strip('*')
+            if 'struct ' in varType:
+                varType = varType.replace('struct ', '')
+            s = 'new %s' % varType
+            return s
+        else:
+            fexpr = fexpr.getValue()
+            values = [x.getValue() for x in values]
+            s = '%s(%s)' % (fexpr, ', '.join(values))
+            #print 'call ', s
+            return s
+
+class CaseStmt(ASTNode):
+
+    def getValue(self):
+        test = self.children[0].getValue()
+        assert self.children[1].kind == None
+        body = self.children[2].getValue()
+        s = 'case %s:\n' % test
+        s += indent(body)
+        s += '\n'
         return s
 
-class CaseStmt(ASTNode): pass
 
 class CharacterLiteral(ASTNode):
     def getValue(self):
@@ -248,7 +290,14 @@ class CompoundAssignOperator(ASTNode):
 class CompoundStmt(ASTNode):
     def getValue(self):
         #return '{' + self.getChildValues(';\n') + '}'
-        return self.getChildValues(';\n')
+        s = ''
+        for child in self.children:
+            s += child.getValue()
+            s = re.sub(r'\s*;', ';', s);
+            ss = s.rstrip()
+            if not ss.endswith('}') and not ss.endswith(';'):
+                s += ';\n'
+        return s
 
 class ConditionalOperator(ASTNode):
 
@@ -261,7 +310,7 @@ class ConditionalOperator(ASTNode):
         #print 'conditional', s
         return s
 
-class ConstAttr(ASTNode): pass
+class ConstAttr(ASTAttr): pass
 
 class ContinueStmt(ASTNode):
     def getValue(self):
@@ -282,9 +331,31 @@ class DeclStmt(ASTNode):
         # TODO: maybe sep=; but not in for loops
         return self.getChildValues('')
 
-class DefaultStmt(ASTNode): pass
-class DeprecatedAttr(ASTNode): pass
-class DoStmt(ASTNode): pass
+class DefaultStmt(ASTNode):
+
+    def getValue(self):
+        body = self.children[0].getValue()
+        assert len(self.children) == 1
+        s = 'default:\n'
+        s += indent(body)
+        s += '\n'
+        return s
+
+
+class DeprecatedAttr(ASTAttr): pass
+
+class DoStmt(ASTNode):
+
+    def getValue(self):
+        assert len(self.children) == 2
+        body = self.children[0].getValue()
+        test = self.children[1].getValue()
+        s = 'do {\n'
+        s += indent(body)
+        s += '\n} while (%s);\n' % test
+        return s
+
+
 class EmptyDecl(ASTNode): pass
 
 class EnumConstantDecl(ASTNode):
@@ -296,20 +367,22 @@ class EnumDecl(ASTNode):
     def getValue(self):
         s = ''
         oldValue = None
+        i_base = 0
         i = 0
         for child in self.children:
             if len(child.children) > 0:
                 value = child.getValue()
                 try:
-                    i = int(child.getValue())
-                except ValueError:
-                    i = child.getValue()
+                    i_base = int(value)
+                except ValueError, e:
+                    i_base = value
+                i = 0
             else:
-                value = i
-                if isinstance(i, int):
-                    i += 1
+                if isinstance(i_base, int):
+                    value = str(i_base + i)
                 else:
-                    i += ' + 1'
+                    value = i_base + ' + ' + str(i)
+            i += 1
             s += '%s = %s;\n' % (child.getVarName(), value)
         return s
 
@@ -321,7 +394,7 @@ class FloatingLiteral(ASTNode):
     def getValue(self):
         return self.getVarName()
 
-class FormatAttr(ASTNode): pass
+class FormatAttr(ASTAttr): pass
 
 class ForStmt(ASTNode):
     def getValue(self):
@@ -332,6 +405,7 @@ class ForStmt(ASTNode):
         test = test.getValue()
         update = update.getValue()
         body = body.getValue()
+        init = init.rstrip(';\n')
         s = 'for (%s; %s; %s) {\n' % (init, test, update)
         s += indent(body)
         s += '}\n'
@@ -396,7 +470,7 @@ class FunctionDecl(ASTNode):
                         #print
 
 
-class GNUInlineAttr(ASTNode): pass
+class GNUInlineAttr(ASTAttr): pass
 class GotoStmt(ASTNode): pass
 class IfStmt(ASTNode):
 
@@ -405,6 +479,8 @@ class IfStmt(ASTNode):
         body = self.children[2].getValue()
         elseClause = self.children[3].getValue()
         s = 'if (%s) {\n' % test
+        if not re.search('[;}]\s*$', body):
+            body = body + ';'
         s += indent(body) + '\n'
         s += '}'
         if elseClause.strip() != '':
@@ -421,7 +497,22 @@ class ImplicitCastExpr(ASTNode):
 
 class ImplicitValueInitExpr(ASTNode): pass
 class IndirectFieldDecl(ASTNode): pass
-class InitListExpr(ASTNode): pass
+
+class InitListExpr(ASTNode):
+
+    def getValue(self):
+        if self.children[0].kind == 'ASTArrayFiller':
+            varType = self.getVarType()
+            size = re.search('[0-9]+', varType).group(0)
+            size = int(size)
+            value = self.children[1].getValue()
+            try:
+                int(value)
+            except ValueError:
+                assert False, ("todo: implement other than int array filler: %s" % value)
+            return '_fillArray(%s, %s)' % (size, value)
+        else:
+            return '[ ' + self.getChildValues(', ') + ' ]'
 
 class IntegerLiteral(ASTNode):
     def getValue(self):
@@ -429,7 +520,7 @@ class IntegerLiteral(ASTNode):
         return varname
 
 class LabelStmt(ASTNode): pass
-class MallocAttr(ASTNode): pass
+class MallocAttr(ASTAttr): pass
 
 class MemberExpr(ASTNode):
 
@@ -448,10 +539,16 @@ class MemberExpr(ASTNode):
 
 
 
-class ModeAttr(ASTNode): pass
-class NonNullAttr(ASTNode): pass
-class NoThrowAttr(ASTNode): pass
-class NullStmt(ASTNode): pass
+class ModeAttr(ASTAttr): pass
+class NonNullAttr(ASTAttr): pass
+class NoThrowAttr(ASTAttr): pass
+
+class NullStmt(ASTNode):
+
+    def getValue(self):
+        assert len(self.children) == 0
+        return ';'
+
 class OffsetOfExpr(ASTNode): pass
 class ParagraphComment(ASTNode): pass
 
@@ -487,15 +584,16 @@ class ParmVarDecl(ASTNode):
                 replacer.replace(ext.start, ext.end, '')
 
 class PredefinedExpr(ASTNode): pass
-class PureAttr(ASTNode): pass
+class PureAttr(ASTAttr): pass
 
 class RecordDecl(ASTNode):
     def getValue(self):
         pos = self.getPosition()
         typeDefSibling = self.parent.children[pos + 1]
         # TODO: check that it overlaps with definition
-        if typeDefSibling.kind == 'TypedefDecl' and typeDefSibling.getExtent().start.line == self.getExtent().start.line:
+        if typeDefSibling.kind == 'TypedefDecl': # and typeDefSibling.getExtent().start.line == self.getExtent().start.line:
             varName = typeDefSibling.getVarName()
+            typeDefSibling.processed = True
         else:
             varName = self.getVarName()
         if varName == None:
@@ -544,15 +642,27 @@ class ReturnStmt(ASTNode):
             s += child.getValue() + '\n'
         return 'return ' + s + ';'
 
-class ReturnsTwiceAttr(ASTNode): pass
-class SentinelAttr(ASTNode): pass
-class StmtExpr(ASTNode): pass
+class ReturnsTwiceAttr(ASTAttr): pass
+class SentinelAttr(ASTAttr): pass
+
+class StmtExpr(ASTNode):
+    def getValue(self):
+        return self.getChildValues()
 
 class StringLiteral(ASTNode):
     def getValue(self):
         return self.getVarName()
 
-class SwitchStmt(ASTNode): pass
+class SwitchStmt(ASTNode):
+
+    def getValue(self):
+        assert self.children[0].kind == None
+        test = self.children[1].getValue()
+        body = self.children[2].getValue()
+        s = 'switch (%s) {\n' % test
+        s += indent(body)
+        s += '}\n'
+        return s
 
 class TextComment(ASTNode): pass
 
@@ -560,17 +670,44 @@ class TranslationUnitDecl(ASTNode):
 
     def getValue(self):
         s = ''
-        s += '"use strict";\n'
+        s += '''
+"use strict";
+function _getSaveLine() {
+    var lineNumber = 0;
+    return function(line) {
+        var tmp = lineNumber;
+        lineNumber = line;
+        return tmp;
+    };
+}
+function _fillArray(size, value) {
+    return Array.apply(null, new Array(size)).map(Number.prototype.valueOf, value);
+}
+var _l = _getSaveLine();
+'''
+        self.root.builtins = [
+                'getSaveLine',
+                '_l'
+                ]
         s += self.getChildValues()
         return s
 
-class TransparentUnionAttr(ASTNode): pass
+class TransparentUnionAttr(ASTAttr): pass
 
 class TypedefDecl(ASTNode):
     def getValue(self):
         return ''
 
-class UnaryExprOrTypeTraitExpr(ASTNode): pass
+class UnaryExprOrTypeTraitExpr(ASTNode):
+
+    def getValue(self):
+        if 'sizeof' in self.line:
+            # case 1: inside alloc/malloc. whole call should be replace with "new Class(defaultValues)"
+            # case 2: else, size of array, call len
+            return "1"
+        else:
+            assert "Unknown UnaryExprOrTypeTraitExpr"
+
 
 class UnaryOperator(ASTNode):
 
@@ -601,16 +738,28 @@ class UnaryOperator(ASTNode):
             elif 'postfix' in self.line:
                 return val1 + operator
 
-class UnusedAttr(ASTNode): pass
+class UnusedAttr(ASTAttr): pass
 class VAArgExpr(ASTNode): pass
 
 class VarDecl(ASTNode):
     def getValue(self):
         varName = self.getVarName()
-        if not 'extern' in self.line:
-            return 'var %s;' % varName
+        if len(self.children) > 0:
+            expr = ''.join([x.getValue() for x in self.children])
+            if not 'extern' in self.line:
+                return 'var %s = %s;\n' % (varName, expr)
+            else:
+                assert False, (varName, expr)
         else:
-            return 'global %s;' % varName
+            if not 'extern' in self.line:
+                return 'var %s;\n' % varName
+            else:
+                # TODO: verify
+                # we plan to concat all JS, so no globals required
+                # save it in case it appears we need to know later
+                self.root.externs[varName] = self
+                return '';
+                #return 'global %s;\n' % varName
 
     def rewrite(self, replacer):
 
@@ -653,8 +802,18 @@ class VarDecl(ASTNode):
 
 
 
-class WarnUnusedResultAttr(ASTNode): pass
-class WhileStmt(ASTNode): pass
+class WarnUnusedResultAttr(ASTAttr): pass
+class WhileStmt(ASTNode):
+
+    def getValue(self):
+        assert self.children[0].kind == None
+        test = self.children[1].getValue()
+        body = self.children[2].getValue()
+        s = 'while (%s) {\n' % test
+        s += indent(body)
+        s += '}\n'
+        return s
+
 
 def parseAST(data):
     'parse AST'
@@ -662,9 +821,6 @@ def parseAST(data):
     parents = [ASTRootNode()]
     oldPrefix = ''
     for rawline in data.splitlines():
-        # Not sure what this is used for exactly, seems to be array init
-        if 'array filler' in rawline:
-            continue
         line = re.sub(r'\033\[[^m]+m', '', rawline)
         lineByColor = re.findall(r'[\033](?P<color>\[[^m]+)m(?P<value>[^\033]*)', rawline)
         #print lineByColor
@@ -676,7 +832,11 @@ def parseAST(data):
         if '<<<NULL>>>' in line:
             ast = ASTNullNode({})
             ast.prefix = prefix
-            ast.kind = None
+            ast.init()
+        elif 'array filler' in line:
+            ast = ASTArrayFiller({})
+            ast.prefix = prefix
+            ast.init()
         else:
             match = re.search('(?P<prefix>[- |`]*)(?P<kind>[A-Za-z]*) (?P<ptr>[^ ]*) (prev (?P<prev>[^ ]* ))?(?P<location>(<[^>]+>)|([^ ]+))(?P<rest>.*)', line)
             #if not match:
@@ -692,6 +852,7 @@ def parseAST(data):
                 print >>sys.stderr, 'unknown kind', kind
                 print >>sys.stderr, 'LINE', line
                 ast = ASTNode(d)
+        ast.root = parents[0]
         ast.rawline = rawline
         ast.line = line
         ast.lineByColor = lineByColor
