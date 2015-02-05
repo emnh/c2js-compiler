@@ -10,6 +10,7 @@
 import os
 import sys
 import re
+from collections import Counter
 
 defaultValues = {
     'int': '0',
@@ -69,11 +70,50 @@ class ASTNode(object):
     def getPosition(self):
         return [i for i, x in enumerate(self.parent.children) if x == self][0]
 
-    def getChildrenRecursive(self):
+    def getChildrenRecursive(self, childFilter=None):
         for child in self.children:
             yield child
-            for grandChild in child.getChildrenRecursive():
-                yield grandChild
+            if childFilter == None or childFilter(child):
+                for grandChild in child.getChildrenRecursive(childFilter):
+                    yield grandChild
+
+    def getVarNames(self, childFilter=None):
+        'get all variable names for moving them up in the hierarchy'
+        def getVarNamesH(node, compoundParent):
+            if node.kind == "CompoundStmt":
+                compoundParent = node
+                compoundParent.variables = []
+            elif node.kind == "VarDecl" and node.declared == False:
+                varName = node.getVarName()
+                varNames[varName] = True
+                counter[varName] += 1
+                if counter[varName] > 1:
+                    shadowVars = True
+                compoundParent.variables.append(node)
+                variables.append(node)
+            for child in node.children:
+                if childFilter == None or childFilter(child):
+                    getVarNamesH(child, compoundParent)
+            if node.kind == "CompoundStmt":
+                for var in compoundParent.variables:
+                    varName = node.getVarName()
+                    counter[varName] -= 1
+
+        counter = Counter()
+        shadowVars = False
+        variables = []
+        varNames = {}
+        getVarNamesH(self, None)
+        varNames = varNames.keys()
+
+        if len(varNames) > 0:
+            statement = 'var ' + ', '.join(varNames) + ';\n'
+        else:
+            statement = ''
+        return {'varNames': varNames,
+                'statement': statement,
+                'variables': variables,
+                'shadowVars': shadowVars}
 
     def getOperator(self):
         return self.rest.split(' ')[-1].strip("'")
@@ -99,7 +139,9 @@ class ASTNode(object):
             varName = varNames[0][1]
             varName = varName.strip()
             varName = varName.strip("'")
-            assert not varName in self.root.builtins
+            if varName in self.root.builtins:
+                print "Renamed var", varName
+                varName = varName + '_'
         else:
             varName = None
         return varName
@@ -185,7 +227,40 @@ class ASTRootNode(ASTNode):
         self.prefix = ''
         self.location = 0
         self.children = []
-        self.builtins = []
+        self.builtins = '''break
+case
+class
+catch
+const
+continue
+debugger
+default
+delete
+do
+else
+export
+extends
+finally
+for
+function
+if
+import
+in
+instanceof
+let
+new
+return
+super
+switch
+this
+throw
+try
+typeof
+var
+void
+while
+with
+yield'''.splitlines()
         self.externs = {}
 
     def getValue(self):
@@ -276,7 +351,9 @@ class CharacterLiteral(ASTNode):
 class CompoundAssignOperator(ASTNode):
 
     def getOperator(self):
-        return self.rest.split(' ')[-3].strip("'")
+        operator =  re.search("'([^']+)' ComputeLHSTy", self.rest).group(1)
+        #return self.rest.split(' ')[-3].strip("'")
+        return operator
 
     def getValue(self):
         c1, c2 = self.children
@@ -288,16 +365,23 @@ class CompoundAssignOperator(ASTNode):
 
 
 class CompoundStmt(ASTNode):
+
     def getValue(self):
         #return '{' + self.getChildValues(';\n') + '}'
         s = ''
+        result = self.getVarNames(lambda y: y.kind != "CompoundStmt")
+        s += result['statement']
         for child in self.children:
             s += child.getValue()
             s = re.sub(r'\s*;', ';', s);
             ss = s.rstrip()
             if not ss.endswith('}') and not ss.endswith(';'):
                 s += ';\n'
-        return s
+        if self.parent.kind != 'SwitchStmt':
+            wrap = '{' + s + '}'
+        else:
+            wrap = s
+        return wrap
 
 class ConditionalOperator(ASTNode):
 
@@ -305,7 +389,11 @@ class ConditionalOperator(ASTNode):
         condition, expr1, expr2 = self.children
         condition = condition.getValue()
         expr1 = expr1.getValue()
+        #if ';' in expr1:
+        #    expr1 = '( %s )' % expr1
         expr2 = expr2.getValue()
+        #if ';' in expr2:
+        #    expr2 = '( %s )' % expr2
         s = '%s ? %s : %s' % (condition, expr1, expr2)
         #print 'conditional', s
         return s
@@ -383,12 +471,15 @@ class EnumDecl(ASTNode):
                 else:
                     value = i_base + ' + ' + str(i)
             i += 1
-            s += '%s = %s;\n' % (child.getVarName(), value)
+            s += 'var %s = %s;\n' % (child.getVarName(), value)
         return s
 
 
-class FieldDecl(ASTNode): pass
-class Field(ASTNode): pass
+# Handled as part of RecordDecl
+class FieldDecl(ASTNode):
+    pass
+class Field(ASTNode):
+    pass
 
 class FloatingLiteral(ASTNode):
     def getValue(self):
@@ -425,11 +516,19 @@ class FunctionDecl(ASTNode):
                 s = ''
                 fields = [x.getVarName() for x in self.children if x.kind == "ParmVarDecl"]
                 for i, field in enumerate(fields):
-                    # prototypes have unnamed arguments
+                    # prototypes can have unnamed arguments
                     if field == None:
                         fields[i] = '_'
+
+                result = self.getVarNames()
+                if not result['shadowVars']:
+                    for var in result['variables']:
+                        var.declared = True
+
                 fields = ', '.join(fields)
                 body = ''.join([x.getValue() for x in self.children if x.kind != "ParmVarDecl"])
+                if not result['shadowVars']:
+                    body = result['statement'] + body
                 s += 'function %s(%s) {\n' % (self.getVarName(), fields)
                 s += indent(body)
                 s += '\n}\n'
@@ -530,14 +629,10 @@ class MemberExpr(ASTNode):
         if member.startswith('.'):
             member = '.' + member[1:]
         elif member.startswith('->'):
-            # TODO: Fix pointer referencing
-            member = '.' + member[2:]
+            member = '.x.' + member[2:]
         s = expr + member
         #print 'member', s
         return s
-
-
-
 
 class ModeAttr(ASTAttr): pass
 class NonNullAttr(ASTAttr): pass
@@ -684,8 +779,11 @@ function _fillArray(size, value) {
     return Array.apply(null, new Array(size)).map(Number.prototype.valueOf, value);
 }
 var _l = _getSaveLine();
+function _varClosure() {
+    
+}
 '''
-        self.root.builtins = [
+        self.root.builtins += [
                 'getSaveLine',
                 '_l'
                 ]
@@ -719,6 +817,26 @@ class UnaryOperator(ASTNode):
             # TODO: check all instances, fix properly
             #print self.rawline
             subVar = None
+            assert len(self.children) == 1
+            child = self.children[0]
+            # TODO: override arithmetic operators on pointers to return same
+            #for child in self.getChildrenRecursive():
+                #print child.rawline
+            #    if child.kind == "DeclRefExpr":
+            #        varType = child.getVarType()
+            #        if '*' or '[' in x.getVarType():
+            #            subVar = child
+            #            break
+            #varName = subVar.getVarName()
+            #index = re.sub('%s' % varName, '0', val1)
+            expr = child.getValue()
+            if not re.search('^[A-Za-z_]+$', expr):
+                expr = '(%s)' % expr
+                print 'deref', expr
+            s = '%s.x' % (expr)
+            return s
+        elif operator == '&':
+            subVar = None
             for child in self.getChildrenRecursive():
                 #print child.rawline
                 if child.kind == "DeclRefExpr":
@@ -727,32 +845,71 @@ class UnaryOperator(ASTNode):
                         subVar = child
                         break
             varName = subVar.getVarName()
-            index = re.sub('%s' % varName, '0', val1)
-            s = '%s[%s]' % (varName, index)
-            #print 'deref', s
+            # TODO: store this in a string and eval it
+            s = '''
+new (function() {
+    var index;
+    this.__defineGetter__("x", function() {
+        if (index !== undefined) return %s[index];
+        return %s;
+    });
+    this.__defineSetter__("x", function(val) {
+        if (index !== undefined) return %s[index] = val;
+        return %s = val;
+    });
+    this.p = function(val) {
+        this.index += val;
+        return this;
+    };
+})()
+''' % (varName, varName, varName, varName)
             return s
         else:
             # TODO: be more specific about prefix/suffix token location
+            space = ''
+            # __extension__ is a GNU operator
+            if re.search('[A-Za-z_]', operator):
+                space = ' '
+                #print 'JS-unsupported GNU operator', operator
+                return val1
             if 'prefix' in self.line:
-                return operator + val1
+                return operator + space + val1
             elif 'postfix' in self.line:
-                return val1 + operator
+                return val1 + space + operator
 
 class UnusedAttr(ASTAttr): pass
 class VAArgExpr(ASTNode): pass
 
 class VarDecl(ASTNode):
+    def __init__(self, d):
+        super(VarDecl, self).__init__(d)
+        self.declared = False
+
     def getValue(self):
         varName = self.getVarName()
         if len(self.children) > 0:
             expr = ''.join([x.getValue() for x in self.children])
             if not 'extern' in self.line:
-                return 'var %s = %s;\n' % (varName, expr)
+                #return 'var %s = %s;\n' % (varName, expr)
+                # variable declarations are pulled up into compound statement
+                # there are still top level var declarations though
+                varPrefix = ''
+                if not self.declared:
+                    varPrefix = 'var '
+                    self.declared = True
+                return varPrefix + '%s = %s;\n' % (varName, expr)
             else:
                 assert False, (varName, expr)
         else:
             if not 'extern' in self.line:
-                return 'var %s;\n' % varName
+                # variable declarations are pulled up into compound statement
+                # but we should still return the value of the variable
+                varPrefix = ''
+                if not self.declared:
+                    varPrefix = 'var '
+                    self.declared = True
+                return varPrefix + "%s;\n" % (varName)
+                #return 'var %s;\n' % varName
             else:
                 # TODO: verify
                 # we plan to concat all JS, so no globals required
@@ -823,7 +980,7 @@ def parseAST(data):
     for rawline in data.splitlines():
         line = re.sub(r'\033\[[^m]+m', '', rawline)
         lineByColor = re.findall(r'[\033](?P<color>\[[^m]+)m(?P<value>[^\033]*)', rawline)
-        #print lineByColor
+        lineByColor = [(x, y) for (x, y) in lineByColor if y.strip() != '']
         prefix = re.search('(?P<prefix>[- |`]*)', line).group('prefix')
         while len(parents[-1].prefix) >= len(prefix) and parents[-1].kind != 'ASTRootNode':
             parents.pop()
