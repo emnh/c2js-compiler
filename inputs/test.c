@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 typedef struct lval_S {
   char a;
   int b;
@@ -44,6 +46,31 @@ void pointers() {
   printf("%s", u);
   *ptr = "blah";
   printf("%s", u);
+
+  char* v[2] = { "string1", "string2" };
+  char** v2 = v;
+  printf("%s", *v2);
+  
+  int x[2] = { 23, 32 };
+  int* x2 = x;
+  printf("%d", *x2);
+  printf("%d", x2[0]);
+
+  x2++;
+  printf("%d", x2[0]);
+
+  char* nul1 = NULL;
+  char* nul2 = 0;
+  if (nul1 == NULL) {
+    puts("nul1 == null");
+  }
+  if (nul2 == NULL) {
+    puts("nul2 == null");
+  }
+  if (u == NULL) {
+    puts("ERROR: u == null");
+  }
+
 }
 
 int main(int argc, char** argv) {

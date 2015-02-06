@@ -60,6 +60,9 @@ class ASTNode(object):
             print 'parent line', parent.rawline
         print 'self line', self.rawline
 
+    def isID(self, expr):
+        return re.search('^[A-Za-z0-9_]+$', expr)
+
     def find(self, filter):
         if filter(self):
             yield self
@@ -129,6 +132,10 @@ class ASTNode(object):
             s += value + sep
         return s
 
+    # TODO: static, could be moved to Util
+    def getBracketNum(self, s):
+        return re.search('\[([0-9]+)\]', s).group(1)
+
     def getValue(self):
         print 'warning, default handler for: ', self.kind
         return self.getChildValues()
@@ -148,6 +155,11 @@ class ASTNode(object):
 
     def getVarType(self):
         varType = filter(lambda x: x[0] == '[0;32', self.lineByColor)[0][1]
+        varType = varType.strip("'")
+        return varType
+
+    def getLastVarType(self):
+        varType = filter(lambda x: x[0] == '[0;32', self.lineByColor)[-1][1]
         varType = varType.strip("'")
         return varType
 
@@ -296,11 +308,40 @@ class ArraySubscriptExpr(ASTNode):
         c1, c2 = self.children
         val1 = c1.getValue()
         val2 = c2.getValue()
-        return '%s[%s]' % (val1, val2)
+        return '%s.s(%s)' % (val1, val2)
 
 class AsmLabelAttr(ASTAttr): pass
 
 class BinaryOperator(ASTNode):
+
+    def overridePointerArithmetic(self, c1, c2, val1, val2, t1, t2, operator):
+        ptr = False
+        hasPtr = False
+        if '*' in t1:
+            ptr = t1
+            other = t2
+            hasPtr = True
+        if '*' in t2:
+            ptr = t2
+            other = t2
+            hasPtr = True
+        if hasPtr:
+            if operator != '=':
+                print 'operator', val1, operator, val2, t1, t2
+            if operator == '=':
+                if 'NullToPointer' in c2.line:
+                    s = '%s = _n'
+                    return s
+            if operator == '==':
+                s = '%s.eq(%s)' % (val1, val2)
+                return s
+            if operator == '!=':
+                s = '(!%s.eq(%s))' % (val1, val2)
+                return s
+            if operator == '+':
+                s = '%s.p(%s)' % (val1, val2)
+                return s
+        return None
 
     def getValue(self):
         c1, c2 = self.children
@@ -308,9 +349,9 @@ class BinaryOperator(ASTNode):
         val2 = c2.getValue()
         operator = self.getOperator()
         t1, t2 = c1.getVarType(), c2.getVarType()
-        if '*' in t1 or '*' in t2:
-            if operator != '=':
-                print 'operator', operator, val1, val2, t1, t2
+        s = self.overridePointerArithmetic(c1, c2, val1, val2, t1, t2, operator)
+        if s != None:
+            return s
         return '%s %s %s' % (val1, operator, val2)
 
 class BreakStmt(ASTNode):
@@ -332,7 +373,9 @@ class CallExpr(ASTNode):
             return s
         else:
             if fexprValue == 'printf':
-                fexprValue = 'console.log'
+                fexprValue = '_printf'
+            if fexprValue == 'puts':
+                fexprValue = '_puts'
             values = [x.getValue() for x in values]
             s = '%s(%s)' % (fexprValue, ', '.join(values))
             #print 'call ', s
@@ -617,7 +660,7 @@ class InitListExpr(ASTNode):
                 assert False, ("todo: implement other than int array filler: %s" % value)
             return '_fillArray(%s, %s)' % (size, value)
         else:
-            return '[ ' + self.getChildValues(', ') + ' ]'
+            return '_r2([ ' + self.getChildValues(', ') + ' ])'
 
 class IntegerLiteral(ASTNode):
     def getValue(self):
@@ -752,7 +795,8 @@ class StmtExpr(ASTNode):
 
 class StringLiteral(ASTNode):
     def getValue(self):
-        return self.getVarName()
+        s = '_r3(%s)' % self.getVarName()
+        return s
 
 class SwitchStmt(ASTNode):
 
@@ -774,7 +818,10 @@ class TranslationUnitDecl(ASTNode):
         self.root.builtins += [
                 'getSaveLine',
                 '_l',
-                '_r'
+                '_r1',
+                '_r2',
+                '_r3',
+                '_n'
                 ]
         s += self.getChildValues()
         return s
@@ -791,7 +838,25 @@ class UnaryExprOrTypeTraitExpr(ASTNode):
         if 'sizeof' in self.line:
             # case 1: inside alloc/malloc. whole call should be replace with "new Class(defaultValues)"
             # case 2: else, size of array, call len
-            return "1"
+            if len(self.children) > 1:
+                self.printParents()
+                assert False
+            tp = self.getLastVarType()
+            if len(self.children) > 0:
+                child = self.children[0]
+                expr = child.getValue()
+                tp = child.getVarType()
+                size = self.getBracketNum(tp)
+                print 'sizeof', tp, expr, size
+                return str(size)
+            else:
+                child = None
+                expr = None
+                # We pretend all structs are size one in javascript, cross
+                # fingers and hope it works. It's because we expect arrays to
+                # contain objects which can only be dereferenced with object
+                # property names.
+                return "1"
         else:
             assert "Unknown UnaryExprOrTypeTraitExpr"
 
@@ -799,55 +864,59 @@ class UnaryExprOrTypeTraitExpr(ASTNode):
 class UnaryOperator(ASTNode):
 
     def getValue(self):
-        c1 = self.children[0]
-        val1 = c1.getValue()
+        assert len(self.children) == 1
+        child = self.children[0]
+        expr = child.getValue()
         operator = self.getOperator()
+
+        # Override pointer arithmetic
+        if '*' in self.getVarType():
+            s = None
+            if operator == '++':
+                if 'prefix' in self.line:
+                    s = '%s.pp(1)' % (expr)
+                elif 'postfix':
+                    s = '%s.pa(1)' % (expr)
+            if operator == '--':
+                if 'prefix' in self.line:
+                    s = '%s.pp(-1)' % (expr)
+                elif 'postfix':
+                    s = '%s.pa(-1)' % (expr)
+            elif operator == '+':
+                s = '%s.p(0)' % (expr)
+            elif operator == '-':
+                s = '%s.neg(0)' % (expr)
+            if s != None:
+                return s
+            elif operator != '*' and operator != '&':
+                print 'UNARY', operator, expr
+
+        # Override dereference and take address
         if operator == '*':
-            # TODO: check all instances, fix properly
-            #print self.rawline
-            subVar = None
-            assert len(self.children) == 1
-            child = self.children[0]
-            # TODO: override arithmetic operators on pointers to return same
-            #for child in self.getChildrenRecursive():
-                #print child.rawline
-            #    if child.kind == "DeclRefExpr":
-            #        varType = child.getVarType()
-            #        if '*' or '[' in x.getVarType():
-            #            subVar = child
-            #            break
-            #varName = subVar.getVarName()
-            #index = re.sub('%s' % varName, '0', val1)
-            expr = child.getValue()
-            if not re.search('^[A-Za-z_]+$', expr):
+            if not self.isID(expr):
                 expr = '(%s)' % expr
                 print 'deref', expr
             s = '%s.x' % (expr)
             return s
         elif operator == '&':
             subVar = None
-            for child in self.getChildrenRecursive():
-                #print child.rawline
-                if child.kind == "DeclRefExpr":
-                    varType = child.getVarType()
-                    if '*' or '[' in x.getVarType():
-                        subVar = child
-                        break
-            varName = subVar.getVarName()
-            s = 'eval(_r(\"%s\"))' % (varName)
+            s = 'eval(_r1(\"%s\"))' % (expr)
+            if not self.isID(expr):
+                print 'ref', expr
             return s
         else:
+            # Normal operators
             # TODO: be more specific about prefix/suffix token location
             space = ''
             # __extension__ is a GNU operator
             if re.search('[A-Za-z_]', operator):
                 space = ' '
                 #print 'JS-unsupported GNU operator', operator
-                return val1
+                return expr
             if 'prefix' in self.line:
-                return operator + space + val1
+                return operator + space + expr
             elif 'postfix' in self.line:
-                return val1 + space + operator
+                return expr + space + operator
 
 class UnusedAttr(ASTAttr): pass
 class VAArgExpr(ASTNode): pass
@@ -860,7 +929,9 @@ class VarDecl(ASTNode):
     def getValue(self):
         varName = self.getVarName()
         if len(self.children) > 0:
-            expr = ''.join([x.getValue() for x in self.children])
+            assert len(self.children) == 1
+            child = self.children[0]
+            expr = child.getValue() #''.join([x.getValue() for x in self.children])
             if not 'extern' in self.line:
                 #return 'var %s = %s;\n' % (varName, expr)
                 # variable declarations are pulled up into compound statement
@@ -869,6 +940,8 @@ class VarDecl(ASTNode):
                 if not self.declared:
                     varPrefix = 'var '
                     self.declared = True
+                if 'NullToPointer' in child.line:
+                    expr = '_n'
                 return varPrefix + '%s = %s;\n' % (varName, expr)
             else:
                 assert False, (varName, expr)
@@ -1106,11 +1179,17 @@ def main():
 
     scriptPath = os.path.dirname(os.path.realpath(__file__))
     preamblePath = os.path.join(scriptPath, 'preamble.js')
+    sprintfPath = os.path.join(scriptPath, 'jscache', 'sprintf.js')
     # TODO: only do that on link stage
     preamble = file(preamblePath).read()
+    sprintf = file(sprintfPath).read()
 
     fd = file(outFileName, 'w')
-    #print >>fd, str(replacer)
+
+    # TODO: only for nodejs testing
+    print >>fd, 'var exports = {};'
+
+    print >>fd, sprintf
     print >>fd, preamble
     print >>fd, ast.getValue()
     print >>fd, "main();"
