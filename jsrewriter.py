@@ -307,7 +307,10 @@ class BinaryOperator(ASTNode):
         val1 = c1.getValue()
         val2 = c2.getValue()
         operator = self.getOperator()
-        #print 'operator', operator
+        t1, t2 = c1.getVarType(), c2.getVarType()
+        if '*' in t1 or '*' in t2:
+            if operator != '=':
+                print 'operator', operator, val1, val2, t1, t2
         return '%s %s %s' % (val1, operator, val2)
 
 class BreakStmt(ASTNode):
@@ -317,8 +320,10 @@ class BreakStmt(ASTNode):
 class CallExpr(ASTNode):
     def getValue(self):
         fexpr = self.children[0]
+        fexprValue = fexpr.getValue()
         values = self.children[1:]
-        if (fexpr.getVarName() == 'alloc' and
+        varName = fexpr.getVarName()
+        if (varName == 'alloc' and
             fexpr.parent.kind == "CStyleCastExpr"):
             varType = fexpr.parent.getVarType().strip('*')
             if 'struct ' in varType:
@@ -326,9 +331,10 @@ class CallExpr(ASTNode):
             s = 'new %s' % varType
             return s
         else:
-            fexpr = fexpr.getValue()
+            if fexprValue == 'printf':
+                fexprValue = 'console.log'
             values = [x.getValue() for x in values]
-            s = '%s(%s)' % (fexpr, ', '.join(values))
+            s = '%s(%s)' % (fexprValue, ', '.join(values))
             #print 'call ', s
             return s
 
@@ -765,27 +771,10 @@ class TranslationUnitDecl(ASTNode):
 
     def getValue(self):
         s = ''
-        s += '''
-"use strict";
-function _getSaveLine() {
-    var lineNumber = 0;
-    return function(line) {
-        var tmp = lineNumber;
-        lineNumber = line;
-        return tmp;
-    };
-}
-function _fillArray(size, value) {
-    return Array.apply(null, new Array(size)).map(Number.prototype.valueOf, value);
-}
-var _l = _getSaveLine();
-function _varClosure() {
-    
-}
-'''
         self.root.builtins += [
                 'getSaveLine',
-                '_l'
+                '_l',
+                '_r'
                 ]
         s += self.getChildValues()
         return s
@@ -845,24 +834,7 @@ class UnaryOperator(ASTNode):
                         subVar = child
                         break
             varName = subVar.getVarName()
-            # TODO: store this in a string and eval it
-            s = '''
-new (function() {
-    var index;
-    this.__defineGetter__("x", function() {
-        if (index !== undefined) return %s[index];
-        return %s;
-    });
-    this.__defineSetter__("x", function(val) {
-        if (index !== undefined) return %s[index] = val;
-        return %s = val;
-    });
-    this.p = function(val) {
-        this.index += val;
-        return this;
-    };
-})()
-''' % (varName, varName, varName, varName)
+            s = 'eval(_r(\"%s\"))' % (varName)
             return s
         else:
             # TODO: be more specific about prefix/suffix token location
@@ -1131,9 +1103,17 @@ def main():
     replacer.fileName = sourceFileName
     #visitor = Visitor(ast, replacer)
     #visitor.visit()
+
+    scriptPath = os.path.dirname(os.path.realpath(__file__))
+    preamblePath = os.path.join(scriptPath, 'preamble.js')
+    # TODO: only do that on link stage
+    preamble = file(preamblePath).read()
+
     fd = file(outFileName, 'w')
     #print >>fd, str(replacer)
+    print >>fd, preamble
     print >>fd, ast.getValue()
+    print >>fd, "main();"
     fd.close()
 
 if __name__ == '__main__':

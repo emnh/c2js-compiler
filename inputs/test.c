@@ -38,6 +38,15 @@ void bang(int* a, int v) {
     }
 }
 
+void pointers() {
+  char* u = "test";
+  char** ptr = &u;
+  printf("%s", u);
+  *ptr = "blah";
+  printf("%s", u);
+}
+
 int main(int argc, char** argv) {
+  pointers();
   return 0;
 }
