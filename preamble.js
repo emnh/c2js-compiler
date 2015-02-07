@@ -24,8 +24,13 @@ new (function() { \
     }); \
     this.eq = function(o) { \
       if (o == 0) { return false; } \
-      return o." + varName + " == this." + varName + " && \
-        o.i  ;\
+      return this.x === o.x; \
+    }; \
+    this.ne = function(o) { \
+      return !this.eq(o); \
+    }; \
+    this.isNull = function() { \
+      return false; \
     }; \
 })()";
 };
@@ -44,37 +49,34 @@ return new (function() {
   this.data = data;
   this.__defineGetter__("x", function() {
     // for records
-    if (this.data.hasOwnProperty('_s1')) {
-      return this.data._s1(this.i).x;
-    } else {
+    //if (this.data.hasOwnProperty('_s1')) {
+    //  return this.data._s1(this.i).x;
+    //} else {
       return this.data[this.i]; 
-    }
+    //}
   });
   this.__defineSetter__("x", function(val) {
     // for records
-    if (this.data.hasOwnProperty('_s1')) {
-      return this.data._s1(this.i).x = val;
-    } else {
+    //if (this.data.hasOwnProperty('_s1')) {
+    //  return this.data._s1(this.i).x = val;
+    //} else {
       return this.data[this.i] = val;
-    }
+    //}
   });
 
   this.__defineGetter__("length", function() {
     return this.data.length; 
   });
-  // *
   this.mul = function(val) {
     var newr = _r2(data);
     newr.i = this.i * _intOrPtr(val);
     return newr;
   };
-  // *
   this.div = function(val) {
     var newr = _r2(data);
     newr.i = this.i / _intOrPtr(val);
     return newr;
   };
-  // +/-
   this.p = function(val) {
     var newr = _r2(data);
     newr.i = this.i + _intOrPtr(val);
@@ -125,6 +127,14 @@ return new (function() {
     // maybe use another _r2 instead?
     return eval(_r1("ar.data[ar.i + i]"));
   };
+  // member access
+  this._m = function() {
+    var ar = this;
+    return ar.data[ar.i]; //eval(_r1("ar.data[ar.i]."));
+  }
+  this.isNull = function() {
+    return false;
+  }
 })();
 };
 
@@ -138,12 +148,27 @@ var _r3 = function(str) {
 
 // Null pointer
 var _n = new function() {
-    this.eq = function(o) {
-        return 0 == o; 
+  this.i = 0;
+   this.__defineGetter__("x", function() {
+     assert(false, "cannot dereference null pointer");
+  });
+  this.__defineSetter__("x", function(val) {
+     assert(false, "cannot assign to null pointer");
+  });
+
+  this.isNull = function() {
+    return true;
+  }
+  this.eq = function(o) {
+    if (typeof o === "number") {
+      return 0 == o;
+    } else {
+      return o.isNull(); 
     }
-    this.ne = function(o) {
-      return 0 != o;
-    }
+  }
+  this.ne = function(o) {
+    return 0 != o;
+  }
 };
 var C = new function(){
   /*this.nullArray = function(size) {
@@ -158,6 +183,45 @@ var C = new function(){
   this.fillString = function(value, size) {
     var ret = this.fillArray(value, size);
     ret.string = true;
+    return ret;
+  }
+  this.isPrimitive = function(cls) {
+    return (cls == 'int'
+        || cls == 'char'
+        || cls == 'short'
+        || cls == 'long'
+        || cls == 'long long'
+        || cls == 'float'
+        || cls == 'double');
+  }
+  this.typeCheck = function(cls, value) {
+    if (cls == 'ptr') {
+      // TODO: check contained type
+      return value.hasOwnProperty('isNull');
+    } else if (cls == 'function') {
+      return true;
+    } else if (cls == 'void' || this.isPrimitive(cls)) {
+      return true;
+    } else {
+      return value instanceof eval(cls);
+    }
+  }
+  this.typeCheckCall = function() {
+    var fexpr = arguments[0];
+    var argClasses = arguments[1];
+    var args = Array.apply(null, arguments).slice(2)
+    //console.log("fexpr", fexpr, "args", args);
+    var ret = eval(fexpr).apply(null, args);
+    if (!this.typeCheck(argClasses[0], ret)) {
+      console.log("return value", ret);
+      throw new Error("invalid return type for " + fexpr + ", expected " + argClasses[0] + ", got " + ret);
+    }
+    for (var i = 0; i < args.length; i++) {
+      var cls = argClasses[i + 1];
+      if (!this.typeCheck(cls, args[i])) {
+        throw new Error("invalid argument type for " + fexpr + ", expected " + cls + ", got " + args[i]);
+      }
+    }
     return ret;
   }
 }();
@@ -225,7 +289,7 @@ function _puts(str) {
 function time(t) {
   var d = new Date();
   var n = d.getTime() / 1000;
-  if (t != 0 || t.ne(0)) {
+  if (t.ne(0)) {
     t.x = n;
   }
   return n;

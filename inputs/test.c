@@ -92,6 +92,15 @@ void pointers() {
     puts("ERROR: u == null");
   }
 
+  if ("test" == "test") {
+    puts("Good: test");
+  }
+  if ("test" != "test") {
+    puts("ERROR: test");
+  }
+  if (v[0] != "string1") {
+    puts("ERROR: v[0] != string1");
+  }
 }
 
 void functions() {

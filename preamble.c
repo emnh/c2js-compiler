@@ -14,6 +14,7 @@ void *fakememset(void *dest, int c, size_t n)
 	return dest;
 }
 
+// parts from musl
 char *strcpy(char *dest, const char *src)
 {
 	unsigned char *s = dest;
@@ -23,4 +24,11 @@ char *strcpy(char *dest, const char *src)
   }
   dest[i] = src[i];
   return dest;
+}
+
+// from musl
+int strcmp(const char *l, const char *r)
+{
+	for (; *l==*r && *l; l++, r++);
+	return *(unsigned char *)l - *(unsigned char *)r;
 }

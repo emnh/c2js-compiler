@@ -275,6 +275,8 @@ class ASTNode(object):
                 startLocation = match2.group(1)
                 start = self.parseLocation(startLocation, True)
                 end = start
+            if start.filename == None:
+                start.filename = self.root.filename
             if end.filename == None:
                 end.filename = start.filename
             if end.line == None:
@@ -290,6 +292,17 @@ class ASTNode(object):
             return int(match.group(1))
         else:
             return None
+
+    def getLogStatement(self, extra):
+        extent = self.getExtent()
+        s = '_log("%s:%s at %s:%s:%s = %s\\n");\n' % (
+                str(self.kind),
+                str(self.getVarName()),
+                str(extent.start.filename),
+                str(extent.start.line),
+                str(extent.start.col),
+                extra)
+        return s
 
     def rewrite(self, replacer):
         pass
@@ -330,7 +343,14 @@ class ASTRootNode(ASTNode):
             primType = self.removeGeneralType(primType)
             primType = self.removeLengthSpecifier(primType)
             primType = self.removeSignSpecifier(primType)
+            primType = self.removeOtherSpecifiers(primType)
+
             primType = self.resolveType(primType)
+
+            primType = self.removeGeneralType(primType)
+            primType = self.removeLengthSpecifier(primType)
+            primType = self.removeSignSpecifier(primType)
+            primType = self.removeOtherSpecifiers(primType)
         return primType
 
     def getDefaultInitializer(self, varType):
@@ -359,6 +379,9 @@ class ASTRootNode(ASTNode):
             else:
                 initializer = 'new %s()' % self.removeGeneralType(varType)
         return initializer
+
+    def removeOtherSpecifiers(self, varType):
+        return re.sub('(const)\s*', '', varType)
 
     def removeSignSpecifier(self, varType):
         return re.sub('((signed)|(unsigned))\s*', '', varType)
@@ -497,20 +520,21 @@ class BinaryOperator(ASTNode):
         s = self.overridePointerArithmetic(c1, c2, val1, val2, t1, t2, operator)
         if s != None:
             return s
-        return '%s %s %s' % (val1, operator, val2)
+        s = '%s %s %s' % (val1, operator, val2)
+        if operator in ['+', '-', '*', '/']:
+            # coerce to int32
+            s = '((%s) >>> 0)' % s
+        return s
 
 class BreakStmt(ASTNode):
     def getValue(self):
         return 'break;\n'
 
 class CallExpr(ASTNode):
-    def getValue(self):
-        fexpr = self.children[0]
-        fexprValue = fexpr.getValue()
-        values = self.children[1:]
-        values = [x.getValue() for x in values]
-        varName = fexpr.getVarName()
+
+    def overrideFunctions(self, fexpr, fexprValue, values):
         allocs = ['alloc', 'malloc']
+        s = None
         if (fexprValue in allocs):
             if ((self.parent.kind == "CStyleCastExpr" or
                 self.parent.kind == "ImplicitCastExpr") and
@@ -535,7 +559,7 @@ class CallExpr(ASTNode):
             else:
                 initializer = self.root.getDefaultInitializer(varType)
                 s = initializer
-            return s
+            return [s, fexprValue]
         elif fexprValue == 'calloc':
             assert False, 'not implemented'
         elif fexprValue == 'printf':
@@ -544,13 +568,45 @@ class CallExpr(ASTNode):
             fexprValue = '_puts'
         elif fexprValue == 'memset':
             # XXX: hack
-            return 'fakememset';
+            fexprValue = 'fakememset'
         elif fexprValue == '__builtin_va_start':
             fexprValue = '__va_list_start'
             values = ['arguments'] + values
         elif fexprValue == '__builtin_va_end':
             fexprValue = '__va_list_end'
-        s = '%s(%s)' % (fexprValue, ', '.join(values))
+        return [s, fexprValue]
+
+    def getValue(self):
+        fexpr = self.children[0]
+        fexprValue = fexpr.getValue()
+        childExpr = self.children[1:]
+        values = [x.getValue() for x in childExpr]
+        types = [self.getVarType()] + [x.getVarType() for x in childExpr]
+        for i, tp in enumerate(types):
+            if re.search('\*[^(]*\([^)]\)', tp):
+                tp = 'function'
+            elif '*' in tp:
+                tp = 'ptr'
+            else:
+                tp = self.root.resolvePrimType(tp.strip(' *'))
+            if not re.search('^[A-Za-z0-9_]+$', tp):
+                assert False, tp
+            types[i] = tp
+        varName = fexpr.getVarName()
+        quotedTypes = ['"' + x + '"' for x in types]
+
+        [s, fexprValue] = self.overrideFunctions(fexpr, fexprValue, values)
+        if s:
+            return s
+
+        typeCheck = True
+        if typeCheck:
+            if len(values) > 0:
+                values = [''] + values # for starting ,
+            #print 'types', quotedTypes
+            s = 'C.typeCheckCall("%s", [%s] %s)' % (fexprValue, ', '.join(quotedTypes), ', '.join(values))
+        else:
+            s = '%s(%s)' % (fexprValue, ', '.join(values))
         #print 'call ', s
         return s
 
@@ -734,7 +790,6 @@ class FunctionDecl(ASTNode):
         if not self.isProtoType():
             varName = self.getVarName()
             if varName != None:
-                s = ''
                 fields = [x.getVarName() for x in self.children if x.kind == "ParmVarDecl"]
                 for i, field in enumerate(fields):
                     # prototypes can have unnamed arguments
@@ -750,12 +805,16 @@ class FunctionDecl(ASTNode):
                 body = ''.join([x.getValue() for x in self.children if x.kind != "ParmVarDecl"])
                 if not result['shadowVars']:
                     body = result['statement'] + body
+                s = ''
                 s += 'function %s(%s) {\n' % (self.getVarName(), fields)
+                s += indent(self.getLogStatement("START"))
                 s += indent(body)
+                s += indent(self.getLogStatement("END"))
                 s += '\n}\n'
                 return s
             else:
                 print 'FunctionDecl', self.rawline
+                assert False
         else:
             return ''
 
@@ -868,7 +927,7 @@ class MemberExpr(ASTNode):
         if member.startswith('.'):
             member = '.' + member[1:]
         elif member.startswith('->'):
-            member = '.data.' + member[2:]
+            member = '._m().' + member[2:]
         s = expr + member
         #print 'member', s
         return s
@@ -1000,7 +1059,7 @@ class RecordDecl(ASTNode):
         casesRead = ''
         casesWrite = ''
         for i, field in enumerate(fields):
-            casesRead += 'case %d: return eval(_r1(\"_record.%s\")); break;\n' % (i, field)
+            casesRead += 'case %d: return eval(_r1(\'_record.%s\')); break;\n' % (i, field)
         body += '''
 this.length = %d;
 this._s1 = function(i) {
@@ -1034,11 +1093,21 @@ this._s1 = function(i) {
 
 
 class ReturnStmt(ASTNode):
+
+    def getParentOfType(self, tp):
+        node = self.parent
+        while node.kind != 'ASTRootNode' and node.kind != tp:
+            node = node.parent
+        return node
+
     def getValue(self):
         s = ''
         for child in self.children:
             s += child.getValue() + '\n'
-        return 'return ' + s + ';'
+        s = 'return ' + s + ';'
+        parentFunction = self.getParentOfType('FunctionDecl').getVarName()
+        s = self.getLogStatement("RETURN from %s") % parentFunction + s
+        return s
 
 class ReturnsTwiceAttr(ASTAttr): pass
 class SentinelAttr(ASTAttr): pass
@@ -1166,9 +1235,9 @@ class UnaryOperator(ASTNode):
             # of using ->. TODO: Detect case of member access to dereferenced
             # value.
             if 'struct' in tp:
-                s = '_r2(%s)' % (expr)
+                s = '_r2([%s])' % (expr)
             else:
-                s = 'eval(_r1(\"%s\"))' % (expr)
+                s = 'eval(_r1(\'%s\'))' % (expr)
             return s
         else:
             # Normal operators
@@ -1296,10 +1365,11 @@ class WhileStmt(ASTNode):
         return s
 
 
-def parseAST(data):
+def parseAST(data, filename):
     'parse AST'
     #data = re.sub(r'\033\[[^m]+m', '', data)
     parents = [ASTRootNode()]
+    parents[0].filename = filename
     oldPrefix = ''
     for rawline in data.splitlines():
         line = re.sub(r'\033\[[^m]+m', '', rawline)
@@ -1459,7 +1529,7 @@ def main():
         outFileName = sourceFileName + '.js'
         sourceData = file(sourceFileName).read()
         astData = file(astFileName).read()
-        ast = parseAST(astData)
+        ast = parseAST(astData, sourceFileName)
         #printKinds = PrintKinds(ast)
         #printKinds.printKinds()
 
