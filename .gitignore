@@ -1,3 +1,6 @@
 *.swp
 /preamble.c.js
 /preamble.c.ast
+/output
+/inputs/test
+/inputs/test.c.js
