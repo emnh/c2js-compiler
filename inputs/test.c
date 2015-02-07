@@ -1,9 +1,12 @@
 #include <stdio.h>
+#include <string.h>
+#include <time.h>
 
 typedef struct lval_S {
   char a;
   int b;
   char* c;
+  int length; // test rename on name collision
 } lval_T;
 
 void foo(int* a, int *b) {
@@ -40,24 +43,34 @@ void bang(int* a, int v) {
     }
 }
 
+void structs() {
+  lval_T param;
+  printf("lval_T: %d\n", param.b);
+  param.b = 2;
+  printf("lval_T: %d\n", param.b);
+  printf("lval_T size: %d\n", sizeof(param));
+}
+
 void pointers() {
   char* u = "test";
   char** ptr = &u;
   printf("%s", u);
   *ptr = "blah";
-  printf("%s", u);
+  printf("%s\n", u);
 
   char* v[2] = { "string1", "string2" };
   char** v2 = v;
-  printf("%s", *v2);
+  printf("%s\n", *v2);
   
   int x[2] = { 23, 32 };
   int* x2 = x;
-  printf("%d", *x2);
-  printf("%d", x2[0]);
-
-  x2++;
-  printf("%d", x2[0]);
+  printf("%d\n", *x2);
+  printf("%d\n", x2[0]);
+  x[0] = 45;
+  x[1] = 56;
+  printf("%d\n", *(x2++));
+  printf("%d\n", *x2);
+  printf("%d\n", x2[0]);
 
   char* nul1 = NULL;
   char* nul2 = 0;
@@ -73,7 +86,21 @@ void pointers() {
 
 }
 
+void functions() {
+  lval_T param;
+  memset(&param, 2, sizeof(param));
+  printf("lval_T: %d\n", param.b);
+  // error currently
+  //printf("lval_T: %d\n", &param->b);
+  
+  time_t starttime;
+  starttime = time(NULL);
+  printf("starttime: %d\n", starttime);
+}
+
 int main(int argc, char** argv) {
+  structs();
   pointers();
+  functions();
   return 0;
 }

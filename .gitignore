@@ -1,1 +1,3 @@
 *.swp
+/preamble.c.js
+/preamble.c.ast

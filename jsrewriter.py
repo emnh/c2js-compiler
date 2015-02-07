@@ -10,13 +10,52 @@
 import os
 import sys
 import re
+import argparse
 from collections import Counter
 
 defaultValues = {
     'int': '0',
     'char': '0',
-    'char *': '""'
+    'short': '0',
+    'long': '0',
+    'float': '0.0',
+    'double': '0.0'
     }
+
+BUILTINS = '''break
+case
+class
+catch
+const
+continue
+debugger
+default
+delete
+do
+else
+export
+extends
+finally
+for
+function
+if
+import
+in
+instanceof
+let
+new
+return
+super
+switch
+this
+throw
+try
+typeof
+var
+void
+while
+with
+yield'''.splitlines()
 
 def indent(s):
     # indent all
@@ -24,6 +63,18 @@ def indent(s):
     # but not blank lines
     s = re.sub(r'^\s*$', '', s, flags=re.MULTILINE)
     return s
+
+class Util(object):
+    @staticmethod
+    def isPrimitive(typeName):
+        return typeName.split(' ')[-1] in [
+                'int',
+                'long',
+                'char',
+                'short',
+                'float',
+                'double'
+                ]
 
 class SourceExtent(object):
     def __init__(self, start, end):
@@ -239,44 +290,28 @@ class ASTRootNode(ASTNode):
         self.prefix = ''
         self.location = 0
         self.children = []
-        self.builtins = '''break
-case
-class
-catch
-const
-continue
-debugger
-default
-delete
-do
-else
-export
-extends
-finally
-for
-function
-if
-import
-in
-instanceof
-let
-new
-return
-super
-switch
-this
-throw
-try
-typeof
-var
-void
-while
-with
-yield'''.splitlines()
+        self.builtins = BUILTINS
         self.externs = {}
+        self.typedefs = {}
+        self.records = {}
 
     def getValue(self):
         return self.getChildValues()
+
+    def resolveType(self, typeName):
+        if ':' in typeName:
+            typeName = typeName.split(':')[0].strip("'")
+        while typeName in self.typedefs:
+            typeName = self.typedefs[typeName]
+            if ':' in typeName:
+                typeName = typeName.split(':')[0].strip("'")
+        return typeName
+
+    def renameField(self, field):
+        if field in ['_s1', 'length']:
+            print 'renaming field: %s' % field
+            field = field + '_'
+        return field
 
 class ASTNullNode(ASTNode):
 
@@ -295,7 +330,7 @@ class ASTArrayFiller(ASTNode):
         self.children = []
 
 class ASTAttr(ASTNode):
-    "usually we don't are about it"
+    "usually we don't care about it"
 
     def getValue(self):
         assert len(self.children) == 0
@@ -308,7 +343,7 @@ class ArraySubscriptExpr(ASTNode):
         c1, c2 = self.children
         val1 = c1.getValue()
         val2 = c2.getValue()
-        return '%s.s(%s)' % (val1, val2)
+        return '%s._s1(%s).x' % (val1, val2)
 
 class AsmLabelAttr(ASTAttr): pass
 
@@ -318,29 +353,71 @@ class BinaryOperator(ASTNode):
         ptr = False
         hasPtr = False
         if '*' in t1:
-            ptr = t1
-            other = t2
+            ptr = val1
+            other = val2
+            otherAsPtr = ''
             hasPtr = True
-        if '*' in t2:
-            ptr = t2
-            other = t2
+            switched = False
+        elif '*' in t2:
+            ptr = val2
+            other = val1
             hasPtr = True
+            switched = True
+        if '*' in t1 and '*' in t2:
+            both = True
         if hasPtr:
             if operator != '=':
                 print 'operator', val1, operator, val2, t1, t2
+            s = None
             if operator == '=':
                 if 'NullToPointer' in c2.line:
-                    s = '%s = _n'
+                    s = '%s = _n' % ptr
                     return s
-            if operator == '==':
-                s = '%s.eq(%s)' % (val1, val2)
-                return s
-            if operator == '!=':
-                s = '(!%s.eq(%s))' % (val1, val2)
-                return s
-            if operator == '+':
-                s = '%s.p(%s)' % (val1, val2)
-                return s
+                #elif c1.kind == "ArraySubscriptExpr":
+                #    c1, c2 = self.children
+                #    val1 = c1.getValue()
+                #    val2 = c2.getValue()
+                #    s = '%s._s1(%s)' % (val1, val2)
+                #    return s
+            # Override pointer arithmetic
+            elif operator == '==':
+                s = '%s.eq(%s)'
+            elif operator == '!=':
+                s = '%s.ne(%s)'
+            elif operator == '+':
+                s = '%s.p(%s)'
+            elif operator == '-':
+                s = '%s.m(%s)'
+            elif operator == '/':
+                s = '%s.div(%s)'
+            elif operator == '*':
+                s = '%s.mul(%s)'
+            elif operator == '>':
+                if switched:
+                    s = '%s.lt(%s)'
+                else:
+                    s = '%s.gt(%s)'
+            elif operator == '<':
+                if switched:
+                    s = '%s.gt(%s)'
+                else:
+                    s = '%s.lt(%s)'
+            elif operator == '>=':
+                if switched:
+                    s = '%s.le(%s)'
+                else:
+                    s = '%s.ge(%s)'
+            elif operator == '<=':
+                if switched:
+                    s = '%s.ge(%s)'
+                else:
+                    s = '%s.le(%s)'
+            elif operator == ',':
+                s = None
+            else:
+                assert False, ('BINARY PTR OPERATOR', operator)
+            if s != None:
+                return s % (ptr, other)
         return None
 
     def getValue(self):
@@ -664,8 +741,12 @@ class InitListExpr(ASTNode):
 
 class IntegerLiteral(ASTNode):
     def getValue(self):
-        varname = self.getVarName()
-        return varname
+        if self.parent.kind == "CStyleCastExpr" and 'NullToPointer' in self.parent.line:
+            # null pointer
+            return '_n'
+        else:
+            varname = self.getVarName()
+            return varname
 
 class LabelStmt(ASTNode): pass
 class MallocAttr(ASTAttr): pass
@@ -674,6 +755,7 @@ class MemberExpr(ASTNode):
 
     def getValue(self):
         member = self.getMember()
+        member = self.root.renameField(member)
         expr = self.getChildValues()
         if member.startswith('.'):
             member = '.' + member[1:]
@@ -738,24 +820,48 @@ class RecordDecl(ASTNode):
         if typeDefSibling.kind == 'TypedefDecl': # and typeDefSibling.getExtent().start.line == self.getExtent().start.line:
             varName = typeDefSibling.getVarName()
             typeDefSibling.processed = True
+            varName2 = self.getVarName()
+            self.root.records[varName] = self
+            self.root.records[varName2] = self
         else:
             varName = self.getVarName()
+            self.root.records[varName] = self
+            varName2 = None
         if varName == None:
             print 'record None', self.rawline
         fields = [x.getVarName() for x in self.children if x.kind == "FieldDecl"]
+        fields = [self.root.renameField(x) for x in fields]
+        self.size = len(fields) # will be looked up later
         for i, field in enumerate(fields):
             # prototypes have unnamed arguments
             if field == None:
                 fields[i] = '_'
         types = [x.getVarType() for x in self.children if x.kind == "FieldDecl"]
-        s = 'function %s(%s) {\n' % (varName, ', '.join(fields))
+        if varName2 != None:
+            s = 'var %s; var %s = %s = function(%s) {\n' % (varName2, varName, varName2, ', '.join(fields))
+        else:
+            s = 'var %s = function(%s) {\n' % (varName, ', '.join(fields))
         body = ''
+        # TODO: resolve type and lookup initializer
         for field, t in zip(fields, types):
             #if t in defaultValues:
             #    defaultValue = defaultValues[t]
             #else:
             #    defaultValue = 'undefined'
-            body += 'this.%s = %s;\n' % (field, field)
+            body += 'this.%s = %s || 0;\n' % (field, field)
+        casesRead = ''
+        casesWrite = ''
+        for i, field in enumerate(fields):
+            casesRead += 'case %d: return eval(_r1(\"_record.%s\")); break;\n' % (i, field)
+        body += '''
+this.length = %d;
+this._s1 = function(i) {
+    var _record = this;
+    switch(i) {
+        %s
+    }
+}
+''' % (len(fields), casesRead)
         s += indent(body)
         s += '}\n'
         return s
@@ -821,7 +927,8 @@ class TranslationUnitDecl(ASTNode):
                 '_r1',
                 '_r2',
                 '_r3',
-                '_n'
+                '_n',
+                'C'
                 ]
         s += self.getChildValues()
         return s
@@ -830,6 +937,9 @@ class TransparentUnionAttr(ASTAttr): pass
 
 class TypedefDecl(ASTNode):
     def getValue(self):
+        typeName = self.getVarName()
+        typeDef = self.getVarType()
+        self.root.typedefs[typeName] = typeDef
         return ''
 
 class UnaryExprOrTypeTraitExpr(ASTNode):
@@ -842,21 +952,28 @@ class UnaryExprOrTypeTraitExpr(ASTNode):
                 self.printParents()
                 assert False
             tp = self.getLastVarType()
+            # sizeof array
             if len(self.children) > 0:
                 child = self.children[0]
+                #tp = child.getVarType()
                 expr = child.getValue()
-                tp = child.getVarType()
-                size = self.getBracketNum(tp)
-                print 'sizeof', tp, expr, size
-                return str(size)
+                #size = self.getBracketNum(tp)
+                s = '%s.length' % expr
+                print 'sizeof: ', s
+                return s
+            # sizeof struct
             else:
                 child = None
                 expr = None
-                # We pretend all structs are size one in javascript, cross
-                # fingers and hope it works. It's because we expect arrays to
-                # contain objects which can only be dereferenced with object
-                # property names.
-                return "1"
+                varType = self.root.resolveType(tp)
+                # We let records be the size number of their members.
+                # Hopefully this works :), since our records are subscriptable
+                # by integer index n corresponding to member number n.
+                if '*' in varType or varType.split(' ')[-1] in defaultValues:
+                    size = 1
+                else:
+                    size = self.root.records[varType].size
+                return str(size)
         else:
             assert "Unknown UnaryExprOrTypeTraitExpr"
 
@@ -900,9 +1017,16 @@ class UnaryOperator(ASTNode):
             return s
         elif operator == '&':
             subVar = None
-            s = 'eval(_r1(\"%s\"))' % (expr)
-            if not self.isID(expr):
-                print 'ref', expr
+            #if not self.isID(expr):
+            assert len(self.children) == 1
+            tp = self.children[0].getLastVarType()
+            tp = self.root.resolveType(tp)
+            #print 'ref', expr, tp
+            # TODO: BIG PROBLEM: ambiguity with resolving records of type _r2
+            if 'struct' in tp:
+                s = '_r2(%s)' % (expr)
+            else:
+                s = 'eval(_r1(\"%s\"))' % (expr)
             return s
         else:
             # Normal operators
@@ -928,6 +1052,8 @@ class VarDecl(ASTNode):
 
     def getValue(self):
         varName = self.getVarName()
+        varType = self.getVarType()
+        # With initializer
         if len(self.children) > 0:
             assert len(self.children) == 1
             child = self.children[0]
@@ -945,6 +1071,7 @@ class VarDecl(ASTNode):
                 return varPrefix + '%s = %s;\n' % (varName, expr)
             else:
                 assert False, (varName, expr)
+        # Without initializer
         else:
             if not 'extern' in self.line:
                 # variable declarations are pulled up into compound statement
@@ -953,7 +1080,24 @@ class VarDecl(ASTNode):
                 if not self.declared:
                     varPrefix = 'var '
                     self.declared = True
-                return varPrefix + "%s;\n" % (varName)
+                # default initialize all variables
+                ptr = False
+                if '*' in varType:
+                    initializer = '_n'
+                else:
+                    varType = self.root.resolveType(varType)
+                    print 'resolve: ', varType
+                    primType = varType.split(' ')[-1]
+                    # TODO: multidim arrays
+                    arrayMatch = re.search('\[([0-9]+)\]', varType)
+                    if primType in defaultValues:
+                        initializer = defaultValues[primType]
+                    elif arrayMatch:
+                        size = arrayMatch.group(1)
+                        initializer = 'C.nullArray(%s)' % size
+                    else:
+                        initializer = 'new %s()' % varType.replace('struct ', '')
+                return varPrefix + "%s = %s;\n" % (varName, initializer)
                 #return 'var %s;\n' % varName
             else:
                 # TODO: verify
@@ -1164,36 +1308,47 @@ class Visitor(object):
 
 def main():
     'entry point'
-    sourceFileName = sys.argv[1]
-    astFileName = sys.argv[2]
-    outFileName = sys.argv[3]
-    sourceData = file(sourceFileName).read()
-    astData = file(astFileName).read()
-    ast = parseAST(astData)
-    #printKinds = PrintKinds(ast)
-    #printKinds.printKinds()
-    replacer = Replacer(sourceData)
-    replacer.fileName = sourceFileName
-    #visitor = Visitor(ast, replacer)
-    #visitor.visit()
+    parser = argparse.ArgumentParser(description='Convert C to JavaScript')
+    parser.add_argument('sourceFiles', metavar='sourceFiles', type=str,
+            nargs='+', help='C source files. file.c.ast must exist for each file.')
+    parser.add_argument('-o', dest='outputfile', type=str, help='output file')
 
+    args = parser.parse_args()
     scriptPath = os.path.dirname(os.path.realpath(__file__))
+
+    sourceFileNames = [os.path.join(scriptPath, 'preamble.c')]
+    sourceFileNames += args.sourceFiles
+    for sourceFileName in sourceFileNames:
+        print 'processing', sourceFileName
+        astFileName = sourceFileName + '.ast'
+        outFileName = sourceFileName + '.js'
+        sourceData = file(sourceFileName).read()
+        astData = file(astFileName).read()
+        ast = parseAST(astData)
+        #printKinds = PrintKinds(ast)
+        #printKinds.printKinds()
+
+        fd = file(outFileName, 'w')
+        print >>fd, ast.getValue()
+        fd.close()
+
+    # link
+    finalOutFileName = args.outputfile
+    outFileName = args.outputfile
     preamblePath = os.path.join(scriptPath, 'preamble.js')
     sprintfPath = os.path.join(scriptPath, 'jscache', 'sprintf.js')
-    # TODO: only do that on link stage
     preamble = file(preamblePath).read()
     sprintf = file(sprintfPath).read()
-
-    fd = file(outFileName, 'w')
-
-    # TODO: only for nodejs testing
+    fd = file(finalOutFileName, 'w')
     print >>fd, 'var exports = {};'
-
     print >>fd, sprintf
     print >>fd, preamble
-    print >>fd, ast.getValue()
+    for sourceFileName in sourceFileNames:
+        outFileName = sourceFileName + '.js'
+        data = file(outFileName).read()
+        print >>fd, data
     print >>fd, "main();"
-    fd.close()
+
 
 if __name__ == '__main__':
     main()
