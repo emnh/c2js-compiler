@@ -90,8 +90,9 @@ void functions() {
   lval_T param;
   memset(&param, 2, sizeof(param));
   printf("lval_T: %d\n", param.b);
+  printf("lval_T: %d\n", (&param)->b);
   // error currently
-  //printf("lval_T: %d\n", &param->b);
+  //printf("lval_T: %d\n", (*(&param)).b);
   
   time_t starttime;
   starttime = time(NULL);

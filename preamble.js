@@ -8,7 +8,7 @@ function _getSaveLine() {
     };
 }
 function _fillArray(size, value) {
-    return Array.apply(null, new Array(size)).map(Number.prototype.valueOf, value);
+    return _r2(Array.apply(null, new Array(size)).map(Number.prototype.valueOf, value));
 }
 var _l = _getSaveLine();
 
@@ -17,21 +17,14 @@ var _l = _getSaveLine();
 var _r1 = function R1(varName) { 
 return "\
 new (function() { \
-    this.i = undefined; \
     this.v = \"" + varName + "\"; \
     this.__defineGetter__(\"x\", function() { \
         var val = " + varName + ";\
-        if (this.i !== undefined) return val[this.i]; \
         return val; \
     }); \
     this.__defineSetter__(\"x\", function(val) { \
-        if (this.i !== undefined) return val[this.i] = val; \
         return " + varName + " = val; \
     }); \
-    this.p = function(val) { \
-        this.i += val; \
-        return this; \
-    }; \
     this.eq = function(o) { \
       if (o == 0) { return false; } \
       return o." + varName + " == this." + varName + " && \
@@ -53,7 +46,6 @@ return new (function() {
   this.i = 0;
   this.data = data;
   this.__defineGetter__("x", function() {
-    console.log("_r2 get");
     // for records
     if (this.data.hasOwnProperty('_s1')) {
       return this.data._s1(this.i).x;
@@ -69,6 +61,7 @@ return new (function() {
       return this.data[this.i] = val;
     }
   });
+
   this.__defineGetter__("length", function() {
     return this.data.length; 
   });
@@ -156,7 +149,7 @@ var _n = new function() {
 };
 var C = new function(){
   this.nullArray = function(size) {
-    return Array.apply(null, new Array(size)).map(Number.prototype.valueOf,0);
+    return _r2(Array.apply(null, new Array(size)).map(Number.prototype.valueOf,0));
   }
 }();
 

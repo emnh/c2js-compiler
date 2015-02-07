@@ -8,3 +8,8 @@ void *memset(void *dest, int c, size_t n)
 	for (; n; n--, s++) *s = c;
 	return dest;
 }
+
+void *fakememset(void *dest, int c, size_t n)
+{
+	return dest;
+}

@@ -307,6 +307,30 @@ class ASTRootNode(ASTNode):
                 typeName = typeName.split(':')[0].strip("'")
         return typeName
 
+    def getDefaultInitializer(self, varType):
+        if '*' in varType:
+            initializer = '_n'
+        else:
+            varType = self.resolveType(varType)
+            #print 'resolve: ', varType
+            primType = varType.split(' ')[-1]
+            # TODO: multidim arrays
+            arrayMatch = re.search('\[([0-9]+)\]', varType)
+            if primType in defaultValues:
+                initializer = defaultValues[primType]
+            elif arrayMatch:
+                size = arrayMatch.group(1)
+                initializer = 'C.nullArray(%s)' % size
+            else:
+                initializer = 'new %s()' % self.removeGeneralType(varType)
+        return initializer
+
+    def removeGeneralType(self, varType):
+        return varType.replace('struct ', '').replace('union ', '').replace('enum ', '')
+
+    def removeLengthSpecifier(self, varType):
+        return re.sub('\[[0-9]+\]', '', varType)
+
     def renameField(self, field):
         if field in ['_s1', 'length']:
             print 'renaming field: %s' % field
@@ -366,8 +390,8 @@ class BinaryOperator(ASTNode):
         if '*' in t1 and '*' in t2:
             both = True
         if hasPtr:
-            if operator != '=':
-                print 'operator', val1, operator, val2, t1, t2
+            #if operator != '=':
+            #print 'operator', val1, operator, val2, t1, t2
             s = None
             if operator == '=':
                 if 'NullToPointer' in c2.line:
@@ -444,15 +468,17 @@ class CallExpr(ASTNode):
         if (varName == 'alloc' and
             fexpr.parent.kind == "CStyleCastExpr"):
             varType = fexpr.parent.getVarType().strip('*')
-            if 'struct ' in varType:
-                varType = varType.replace('struct ', '')
+            varType = self.root.replaceGeneralType(varType)
             s = 'new %s' % varType
             return s
         else:
             if fexprValue == 'printf':
                 fexprValue = '_printf'
-            if fexprValue == 'puts':
+            elif fexprValue == 'puts':
                 fexprValue = '_puts'
+            elif fexprValue == 'memset':
+                # XXX: hack
+                return 'fakememset';
             values = [x.getValue() for x in values]
             s = '%s(%s)' % (fexprValue, ', '.join(values))
             #print 'call ', s
@@ -630,7 +656,6 @@ class ForStmt(ASTNode):
 
 class FullComment(ASTNode): pass
 
-# TODO: disable function prototypes
 class FunctionDecl(ASTNode):
     def isProtoType(self):
         return all(child.kind != 'CompoundStmt' for child in self.children)
@@ -737,7 +762,20 @@ class InitListExpr(ASTNode):
                 assert False, ("todo: implement other than int array filler: %s" % value)
             return '_fillArray(%s, %s)' % (size, value)
         else:
-            return '_r2([ ' + self.getChildValues(', ') + ' ])'
+            varType = self.getVarType()
+            varType = self.root.resolveType(varType)
+            plainType = self.root.removeGeneralType(varType)
+            withoutLength = self.root.removeLengthSpecifier(plainType)
+            if 'anonymous' in plainType:
+                print 'TODO: anonymous list init'
+            # struct initialization, but not arrays
+            if (plainType != varType and
+                    not 'anonymous' in plainType and
+                    not withoutLength != plainType):
+                return '(new %s(%s))\n' % (plainType, self.getChildValues(', ').strip(', '))
+            # regular array
+            else:
+                return '_r2([ ' + self.getChildValues(', ').strip(', ') + ' ])\n'
 
 class IntegerLiteral(ASTNode):
     def getValue(self):
@@ -760,7 +798,7 @@ class MemberExpr(ASTNode):
         if member.startswith('.'):
             member = '.' + member[1:]
         elif member.startswith('->'):
-            member = '.x.' + member[2:]
+            member = '.data.' + member[2:]
         s = expr + member
         #print 'member', s
         return s
@@ -812,7 +850,17 @@ class ParmVarDecl(ASTNode):
 class PredefinedExpr(ASTNode): pass
 class PureAttr(ASTAttr): pass
 
+# TODO: handle nested RecordDecl
 class RecordDecl(ASTNode):
+
+    def isSubRecord(self):
+        node = self
+        while node.kind != "ASTRootNode":
+            node = node.parent
+            if node.kind == "RecordDecl":
+                return True
+        return False
+
     def getValue(self):
         pos = self.getPosition()
         typeDefSibling = self.parent.children[pos + 1]
@@ -823,13 +871,39 @@ class RecordDecl(ASTNode):
             varName2 = self.getVarName()
             self.root.records[varName] = self
             self.root.records[varName2] = self
+        # can happen for instance with nested anonymous union or record
+        elif typeDefSibling.kind == 'FieldDecl':
+            varName = typeDefSibling.getVarName()
+            typeDefSibling.processed = True
+            varName2 = self.getVarName()
         else:
             varName = self.getVarName()
             self.root.records[varName] = self
             varName2 = None
+
+        self.recordName = varName
+
+        # TODO: qualified name for subrecords
+        if varName != None:
+            self.root.records[varName] = self
+        if varName2 != None:
+            self.root.records[varName2] = self
+
+        # TODO: must be something to fix if this happens
         if varName == None:
             print 'record None', self.rawline
-        fields = [x.getVarName() for x in self.children if x.kind == "FieldDecl"]
+
+        subrecords = []
+        subrecordValues = []
+        for child in self.children:
+            if child.kind == 'RecordDecl':
+                subrecord = child
+                subrecords.append(subrecord)
+                value = child.getValue()
+                subrecordValues.append(value)
+
+        fieldNodes = [x for x in self.children if x.kind == "FieldDecl"]
+        fields = [x.getVarName() for x in fieldNodes]
         fields = [self.root.renameField(x) for x in fields]
         self.size = len(fields) # will be looked up later
         for i, field in enumerate(fields):
@@ -843,12 +917,16 @@ class RecordDecl(ASTNode):
             s = 'var %s = function(%s) {\n' % (varName, ', '.join(fields))
         body = ''
         # TODO: resolve type and lookup initializer
-        for field, t in zip(fields, types):
-            #if t in defaultValues:
-            #    defaultValue = defaultValues[t]
-            #else:
-            #    defaultValue = 'undefined'
-            body += 'this.%s = %s || 0;\n' % (field, field)
+        for field, node, t in zip(fields, fieldNodes, types):
+            initializer = self.root.getDefaultInitializer(t)
+            if 'anonymous' in initializer:
+                assert node.processed == True
+            else:
+                body += 'this.%s = %s || %s;\n' % (field, field, initializer)
+        # TODO: emit subrecord in the order specified
+        for subrecord, value in zip(subrecords, subrecordValues):
+            body += indent(value)
+            body += 'this.%s = new %s();' % (subrecord.recordName, subrecord.recordName)
         casesRead = ''
         casesWrite = ''
         for i, field in enumerate(fields):
@@ -972,6 +1050,7 @@ class UnaryExprOrTypeTraitExpr(ASTNode):
                 if '*' in varType or varType.split(' ')[-1] in defaultValues:
                     size = 1
                 else:
+                    varType = self.root.removeGeneralType(varType)
                     size = self.root.records[varType].size
                 return str(size)
         else:
@@ -1023,6 +1102,9 @@ class UnaryOperator(ASTNode):
             tp = self.root.resolveType(tp)
             #print 'ref', expr, tp
             # TODO: BIG PROBLEM: ambiguity with resolving records of type _r2
+            # currently only a problem if you do (*(&structvar)).member instead
+            # of using ->. TODO: Detect case of member access to dereferenced
+            # value.
             if 'struct' in tp:
                 s = '_r2(%s)' % (expr)
             else:
@@ -1081,22 +1163,7 @@ class VarDecl(ASTNode):
                     varPrefix = 'var '
                     self.declared = True
                 # default initialize all variables
-                ptr = False
-                if '*' in varType:
-                    initializer = '_n'
-                else:
-                    varType = self.root.resolveType(varType)
-                    print 'resolve: ', varType
-                    primType = varType.split(' ')[-1]
-                    # TODO: multidim arrays
-                    arrayMatch = re.search('\[([0-9]+)\]', varType)
-                    if primType in defaultValues:
-                        initializer = defaultValues[primType]
-                    elif arrayMatch:
-                        size = arrayMatch.group(1)
-                        initializer = 'C.nullArray(%s)' % size
-                    else:
-                        initializer = 'new %s()' % varType.replace('struct ', '')
+                initializer = self.root.getDefaultInitializer(varType)
                 return varPrefix + "%s = %s;\n" % (varName, initializer)
                 #return 'var %s;\n' % varName
             else:
