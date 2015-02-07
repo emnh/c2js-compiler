@@ -344,7 +344,7 @@ class ASTRootNode(ASTNode):
             arraySize = self.getLengthSpecifier(varType)
             if arraySize:
                 primType = self.resolvePrimType(varType)
-                print "array", varType, primType, arraySize
+                #print "array", varType, primType, arraySize
                 if primType in defaultValues:
                     defaultValue = defaultValues[primType]
                     initializer = 'C.fillArray(%s, %d)' % (defaultValue, arraySize)
@@ -352,6 +352,7 @@ class ASTRootNode(ASTNode):
                     if primType == '__va_list_tag':
                         initializer = 'new %s()' % (primType)
                     else:
+                        assert primType != 'void'
                         initializer = 'C.typedArray(%s, %d)' % (primType, arraySize)
             elif primType in defaultValues:
                 initializer = defaultValues[primType]
@@ -511,8 +512,14 @@ class CallExpr(ASTNode):
         varName = fexpr.getVarName()
         allocs = ['alloc', 'malloc']
         if (fexprValue in allocs):
-            assert self.parent.kind == "CStyleCastExpr" or self.parent.kind == "ImplicitCastExpr"
-            varType = self.parent.getVarType()
+            if ((self.parent.kind == "CStyleCastExpr" or
+                self.parent.kind == "ImplicitCastExpr") and
+                not 'void' in self.parent.getVarType()):
+                varType = self.parent.getVarType()
+            else:
+                # Will be return type of alloc function, like char_u or void*,
+                # but looks like result is of same type.
+                varType = self.getVarType()
             if '*' in varType:
                 primType = self.root.resolvePrimType(varType.strip(' *'))
                 sizeExpr = values[0]
@@ -523,6 +530,7 @@ class CallExpr(ASTNode):
                     else:
                         s = 'C.fillArray(%s, %s)' % (defaultValue, sizeExpr)
                 else:
+                    assert primType != 'void'
                     s = 'C.typedArray(%s, %s)' % (primType, sizeExpr)
             else:
                 initializer = self.root.getDefaultInitializer(varType)
