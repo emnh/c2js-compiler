@@ -20,11 +20,10 @@ loads the definitions in nodejs without errors, but I haven't tried running
 anything in a Web browser yet.
 
 # TODO
- - Pointer arithmetic. Array pointers.
  - Goto statements and labels.
  - JavaScript to C source maps.
  - Resolve variable type issues, JavaScript string versus char\* etc.
  -
  - Compile musl (light libc) and get libraries from Emscripten.
- - Implement filesystem (can probably borrow from Emscripten).
+ - Implement filesystem (can probably borrow from Emscripten). Use browserfs.
  - Compile simple tool and try to run.
