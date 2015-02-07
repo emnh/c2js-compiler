@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdarg.h>
 
 typedef struct lval_S {
   char a;
@@ -49,6 +50,13 @@ void structs() {
   param.b = 2;
   printf("lval_T: %d\n", param.b);
   printf("lval_T size: %d\n", sizeof(param));
+
+  lval_T params[10];
+  params[0] = param;
+  printf("lval_T: %d\n", param.b);
+
+  lval_T param2 = {0, 0, "helo"};
+  printf("lval_T.c: %s\n", param2.c);
 }
 
 void pointers() {
@@ -97,11 +105,35 @@ void functions() {
   time_t starttime;
   starttime = time(NULL);
   printf("starttime: %d\n", starttime);
+
+  char* a = malloc(10);
+  char* b = "hello";
+  char* c = "world";
+  puts(b);
+  puts(c);
+  strcpy(a, b);
+  puts(a);
+  strcpy(a, c);
+  puts(a);
+}
+
+// varargs
+void printargs(int arg1, ...)
+{
+  va_list ap;
+  int i;
+ 
+  va_start(ap, arg1); 
+  for (i = arg1; i >= 0; i = va_arg(ap, int))
+    printf("%d ", i);
+  va_end(ap);
+  puts("");
 }
 
 int main(int argc, char** argv) {
   structs();
   pointers();
   functions();
+  printargs(5, 2, 14, 84, 97, 15, -1, 48, -1);
   return 0;
 }

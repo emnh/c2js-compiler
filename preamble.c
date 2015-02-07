@@ -13,3 +13,14 @@ void *fakememset(void *dest, int c, size_t n)
 {
 	return dest;
 }
+
+char *strcpy(char *dest, const char *src)
+{
+	unsigned char *s = dest;
+  int i;
+	for (i = 0; src[i] != 0; i++) {
+    dest[i] = src[i];
+  }
+  dest[i] = src[i];
+  return dest;
+}

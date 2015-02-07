@@ -7,9 +7,6 @@ function _getSaveLine() {
         return tmp;
     };
 }
-function _fillArray(size, value) {
-    return _r2(Array.apply(null, new Array(size)).map(Number.prototype.valueOf, value));
-}
 var _l = _getSaveLine();
 
 // Function for creating references to variables.
@@ -133,7 +130,8 @@ return new (function() {
 
 // convert string to array
 var _r3 = function(str) {
-  var stringArray = _r2(str.split('').map(function(x) { return x.charCodeAt(0) }));
+  var stringArray = _r2((str + "\0").split('').map(function(x) { return x.charCodeAt(0) }));
+  //stringArray.data.push(0); // Null termination by default
   stringArray.string = true;
   return stringArray;
 }
@@ -148,10 +146,31 @@ var _n = new function() {
     }
 };
 var C = new function(){
-  this.nullArray = function(size) {
+  /*this.nullArray = function(size) {
     return _r2(Array.apply(null, new Array(size)).map(Number.prototype.valueOf,0));
+  }*/
+  this.typedArray = function(cls, size) {
+    return _r2(Array.apply(null, new Array(size)).map(function() { return new cls(); },0));
+  }
+  this.fillArray = function(value, size) {
+    return _r2(Array.apply(null, new Array(size)).map(function() { return value; }, 0));
+  }
+  this.fillString = function(value, size) {
+    var ret = this.fillArray(value, size);
+    ret.string = true;
+    return ret;
   }
 }();
+
+function assert(condition, message) {
+    if (!condition) {
+        message = message || "Assertion failed";
+        if (typeof Error !== "undefined") {
+            throw new Error(message);
+        }
+        throw message; // Fallback
+    }
+}
 
 function derefArray(arg) {
   if (arg !== null && arg !== undefined && typeof(arg) == 'object')  {
@@ -159,12 +178,26 @@ function derefArray(arg) {
     if (arg.hasOwnProperty('data')) {
       if (arg.hasOwnProperty('string')) {
         arg = arg.data.map(function(y) { return String.fromCharCode(y); }).join('');
+        arg = arg.replace(/\0$/, '');
       } else {
         arg = arg.data;
       }
     }
   }
   return arg;
+}
+
+// console.log will print too many newlines, but there is no better alternative
+// unless on nodejs
+function _log() {
+  // nodejs
+  if (process !== undefined) {
+    for (var i in arguments) {
+      process.stdout.write(arguments[i]);
+    }
+  } else {
+    console.log(arguments);
+  }
 }
 
 function _printf(format) {
@@ -174,8 +207,8 @@ function _printf(format) {
     newargs.push(arg);
   }
   // console.log appends newline, so strip it
-  newargs[0] = newargs[0].replace(/[\n]+$/g, '')
-  console.log(exports.sprintf.apply(null, newargs));
+  // newargs[0] = newargs[0].replace(/[\n]+$/g, '')
+  _log(exports.sprintf.apply(null, newargs));
 }
 
 function _puts(str) {
@@ -184,7 +217,8 @@ function _puts(str) {
     var arg = derefArray(arguments[i]);
     newargs.push(arg);
   }
-  console.log.apply(null, newargs);
+  newargs.push('\n');
+  _log.apply(null, newargs);
 }
 
 // C functions
@@ -195,6 +229,27 @@ function time(t) {
     t.x = n;
   }
   return n;
+}
+
+// Varargs
+function __va_list_tag() {
+  this.index = 0;
+  //this.length = 0;
+  this.arguments = [];
+  this.getNextArg = function() {
+    /*if (this.index >= this.length) {
+      return 0;
+    }*/
+    var arg = this.arguments[this.index];
+    this.index += 1;
+    return arg;
+  }
+}
+function __va_list_start(args, ap, length) {
+  ap.arguments = args;
+  ap.length = length;
+}
+function __va_list_end(ap) {
 }
 
 // Test code

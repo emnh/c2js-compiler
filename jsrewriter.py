@@ -18,11 +18,12 @@ defaultValues = {
     'char': '0',
     'short': '0',
     'long': '0',
+    'long long': '0',
     'float': '0.0',
     'double': '0.0'
     }
 
-BUILTINS = '''break
+JSBUILTINS = '''break
 case
 class
 catch
@@ -56,6 +57,15 @@ void
 while
 with
 yield'''.splitlines()
+
+BUILTINS = '''getSaveLine
+_l
+_r1
+_r2
+_r3
+_n
+C
+'''.splitlines()
 
 def indent(s):
     # indent all
@@ -290,7 +300,7 @@ class ASTRootNode(ASTNode):
         self.prefix = ''
         self.location = 0
         self.children = []
-        self.builtins = BUILTINS
+        self.builtins = JSBUILTINS + BUILTINS
         self.externs = {}
         self.typedefs = {}
         self.records = {}
@@ -298,14 +308,30 @@ class ASTRootNode(ASTNode):
     def getValue(self):
         return self.getChildValues()
 
-    def resolveType(self, typeName):
-        if ':' in typeName:
-            typeName = typeName.split(':')[0].strip("'")
-        while typeName in self.typedefs:
-            typeName = self.typedefs[typeName]
-            if ':' in typeName:
-                typeName = typeName.split(':')[0].strip("'")
+    def getLastType(self, typeName):
+        if "':'" in typeName:
+            typeName = typeName.split("':'")[-1].strip("'")
         return typeName
+
+    def resolveType(self, typeName):
+        old = None
+        typeName = self.getLastType(typeName)
+        while typeName in self.typedefs and old != typeName:
+            old = typeName
+            typeName = self.typedefs[typeName]
+            typeName = self.getLastType(typeName)
+        return typeName
+
+    def resolvePrimType(self, varType):
+        primType = varType
+        old = None
+        while primType != old:
+            old = primType
+            primType = self.removeGeneralType(primType)
+            primType = self.removeLengthSpecifier(primType)
+            primType = self.removeSignSpecifier(primType)
+            primType = self.resolveType(primType)
+        return primType
 
     def getDefaultInitializer(self, varType):
         if '*' in varType:
@@ -313,23 +339,40 @@ class ASTRootNode(ASTNode):
         else:
             varType = self.resolveType(varType)
             #print 'resolve: ', varType
-            primType = varType.split(' ')[-1]
+            primType = self.removeSignSpecifier(varType) #.split(' ')[-1]
             # TODO: multidim arrays
-            arrayMatch = re.search('\[([0-9]+)\]', varType)
-            if primType in defaultValues:
+            arraySize = self.getLengthSpecifier(varType)
+            if arraySize:
+                primType = self.resolvePrimType(varType)
+                print "array", varType, primType, arraySize
+                if primType in defaultValues:
+                    defaultValue = defaultValues[primType]
+                    initializer = 'C.fillArray(%s, %d)' % (defaultValue, arraySize)
+                else:
+                    if primType == '__va_list_tag':
+                        initializer = 'new %s()' % (primType)
+                    else:
+                        initializer = 'C.typedArray(%s, %d)' % (primType, arraySize)
+            elif primType in defaultValues:
                 initializer = defaultValues[primType]
-            elif arrayMatch:
-                size = arrayMatch.group(1)
-                initializer = 'C.nullArray(%s)' % size
             else:
                 initializer = 'new %s()' % self.removeGeneralType(varType)
         return initializer
 
+    def removeSignSpecifier(self, varType):
+        return re.sub('((signed)|(unsigned))\s*', '', varType)
+
     def removeGeneralType(self, varType):
-        return varType.replace('struct ', '').replace('union ', '').replace('enum ', '')
+        return re.sub('((union)|(enum)|(struct))\s*', '', varType)
 
     def removeLengthSpecifier(self, varType):
-        return re.sub('\[[0-9]+\]', '', varType)
+        return re.sub('\s*\[([0-9]+)\]', '', varType)
+
+    def getLengthSpecifier(self, varType):
+        match = re.search('\[([0-9]+)\]', varType)
+        if match:
+            match = int(match.group(1))
+        return match
 
     def renameField(self, field):
         if field in ['_s1', 'length']:
@@ -464,25 +507,44 @@ class CallExpr(ASTNode):
         fexpr = self.children[0]
         fexprValue = fexpr.getValue()
         values = self.children[1:]
+        values = [x.getValue() for x in values]
         varName = fexpr.getVarName()
-        if (varName == 'alloc' and
-            fexpr.parent.kind == "CStyleCastExpr"):
-            varType = fexpr.parent.getVarType().strip('*')
-            varType = self.root.replaceGeneralType(varType)
-            s = 'new %s' % varType
+        allocs = ['alloc', 'malloc']
+        if (fexprValue in allocs):
+            assert self.parent.kind == "CStyleCastExpr" or self.parent.kind == "ImplicitCastExpr"
+            varType = self.parent.getVarType()
+            if '*' in varType:
+                primType = self.root.resolvePrimType(varType.strip(' *'))
+                sizeExpr = values[0]
+                if primType in defaultValues:
+                    defaultValue = defaultValues[primType]
+                    if primType == 'char':
+                        s = 'C.fillString(%s, %s)' % (defaultValue, sizeExpr)
+                    else:
+                        s = 'C.fillArray(%s, %s)' % (defaultValue, sizeExpr)
+                else:
+                    s = 'C.typedArray(%s, %s)' % (primType, sizeExpr)
+            else:
+                initializer = self.root.getDefaultInitializer(varType)
+                s = initializer
             return s
-        else:
-            if fexprValue == 'printf':
-                fexprValue = '_printf'
-            elif fexprValue == 'puts':
-                fexprValue = '_puts'
-            elif fexprValue == 'memset':
-                # XXX: hack
-                return 'fakememset';
-            values = [x.getValue() for x in values]
-            s = '%s(%s)' % (fexprValue, ', '.join(values))
-            #print 'call ', s
-            return s
+        elif fexprValue == 'calloc':
+            assert False, 'not implemented'
+        elif fexprValue == 'printf':
+            fexprValue = '_printf'
+        elif fexprValue == 'puts':
+            fexprValue = '_puts'
+        elif fexprValue == 'memset':
+            # XXX: hack
+            return 'fakememset';
+        elif fexprValue == '__builtin_va_start':
+            fexprValue = '__va_list_start'
+            values = ['arguments'] + values
+        elif fexprValue == '__builtin_va_end':
+            fexprValue = '__va_list_end'
+        s = '%s(%s)' % (fexprValue, ', '.join(values))
+        #print 'call ', s
+        return s
 
 class CaseStmt(ASTNode):
 
@@ -760,7 +822,7 @@ class InitListExpr(ASTNode):
                 int(value)
             except ValueError:
                 assert False, ("todo: implement other than int array filler: %s" % value)
-            return '_fillArray(%s, %s)' % (size, value)
+            return 'C.fillArray(%s, %s)' % (value, size)
         else:
             varType = self.getVarType()
             varType = self.root.resolveType(varType)
@@ -769,7 +831,7 @@ class InitListExpr(ASTNode):
             if 'anonymous' in plainType:
                 print 'TODO: anonymous list init'
             # struct initialization, but not arrays
-            if (plainType != varType and
+            if (not plainType in defaultValues and
                     not 'anonymous' in plainType and
                     not withoutLength != plainType):
                 return '(new %s(%s))\n' % (plainType, self.getChildValues(', ').strip(', '))
@@ -998,17 +1060,7 @@ class TextComment(ASTNode): pass
 class TranslationUnitDecl(ASTNode):
 
     def getValue(self):
-        s = ''
-        self.root.builtins += [
-                'getSaveLine',
-                '_l',
-                '_r1',
-                '_r2',
-                '_r3',
-                '_n',
-                'C'
-                ]
-        s += self.getChildValues()
+        s = self.getChildValues()
         return s
 
 class TransparentUnionAttr(ASTAttr): pass
@@ -1125,7 +1177,15 @@ class UnaryOperator(ASTNode):
                 return expr + space + operator
 
 class UnusedAttr(ASTAttr): pass
-class VAArgExpr(ASTNode): pass
+
+class VAArgExpr(ASTNode):
+    def getValue(self):
+        assert len(self.children) == 1
+        child = self.children[0]
+        # usually name of va_list, usually "ap"
+        value = child.getValue()
+        s = '%s.getNextArg()' % value
+        return s
 
 class VarDecl(ASTNode):
     def __init__(self, d):
