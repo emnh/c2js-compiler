@@ -121,6 +121,7 @@ class ASTNode(object):
             print 'parent line', parent.rawline
         print 'self line', self.rawline
 
+    # TODO: move to Util
     def isID(self, expr):
         return re.search('^[A-Za-z0-9_]+$', expr)
 
@@ -589,7 +590,7 @@ class CallExpr(ASTNode):
                 tp = 'ptr'
             else:
                 tp = self.root.resolvePrimType(tp.strip(' *'))
-            if not re.search('^[A-Za-z0-9_]+$', tp):
+            if not self.isID(tp):
                 assert False, tp
             types[i] = tp
         varName = fexpr.getVarName()
@@ -1511,6 +1512,9 @@ class Visitor(object):
         for child in node.children:
             self.visit(child)
 
+def sourceToJS(fname):
+    return fname.replace('.c', '.js')
+
 def main():
     'entry point'
     parser = argparse.ArgumentParser(description='Convert C to JavaScript')
@@ -1521,12 +1525,14 @@ def main():
     args = parser.parse_args()
     scriptPath = os.path.dirname(os.path.realpath(__file__))
 
-    sourceFileNames = [os.path.join(scriptPath, 'preamble.c')]
+    sourceFileNames = [os.path.join(scriptPath, 'lib', 'baselib.c')]
     sourceFileNames += args.sourceFiles
     for sourceFileName in sourceFileNames:
         print 'processing', sourceFileName
-        astFileName = sourceFileName + '.ast'
-        outFileName = sourceFileName + '.js'
+        if not sourceFileName.endswith('.c'):
+            raise Exception("source filename must end with .c")
+        astFileName = sourceFileName.replace('.c', '.ast')
+        outFileName = sourceToJS(sourceFileName)
         sourceData = file(sourceFileName).read()
         astData = file(astFileName).read()
         ast = parseAST(astData, sourceFileName)
@@ -1540,7 +1546,7 @@ def main():
     # link
     finalOutFileName = args.outputfile
     outFileName = args.outputfile
-    preamblePath = os.path.join(scriptPath, 'preamble.js')
+    preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
     sprintfPath = os.path.join(scriptPath, 'jscache', 'sprintf.js')
     preamble = file(preamblePath).read()
     sprintf = file(sprintfPath).read()
@@ -1549,7 +1555,7 @@ def main():
     print >>fd, sprintf
     print >>fd, preamble
     for sourceFileName in sourceFileNames:
-        outFileName = sourceFileName + '.js'
+        outFileName = sourceToJS(sourceFileName)
         data = file(outFileName).read()
         print >>fd, data
     print >>fd, "main();"

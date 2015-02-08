@@ -4,3 +4,4 @@
 /output
 /inputs/test
 /inputs/test.c.js
+*.ast
