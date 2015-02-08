@@ -536,6 +536,7 @@ class CallExpr(ASTNode):
     def overrideFunctions(self, fexpr, fexprValue, values):
         allocs = ['alloc', 'malloc']
         s = None
+        typeCheck = True
         if (fexprValue in allocs):
             if ((self.parent.kind == "CStyleCastExpr" or
                 self.parent.kind == "ImplicitCastExpr") and
@@ -560,7 +561,7 @@ class CallExpr(ASTNode):
             else:
                 initializer = self.root.getDefaultInitializer(varType)
                 s = initializer
-            return [s, fexprValue]
+            return [s, fexprValue, typeCheck]
         elif fexprValue == 'calloc':
             assert False, 'not implemented'
         elif fexprValue == 'printf':
@@ -573,9 +574,11 @@ class CallExpr(ASTNode):
         elif fexprValue == '__builtin_va_start':
             fexprValue = '__va_list_start'
             values = ['arguments'] + values
+            typeCheck = False
         elif fexprValue == '__builtin_va_end':
             fexprValue = '__va_list_end'
-        return [s, fexprValue]
+            typeCheck = False
+        return [s, fexprValue, typeCheck]
 
     def getValue(self):
         fexpr = self.children[0]
@@ -596,11 +599,10 @@ class CallExpr(ASTNode):
         varName = fexpr.getVarName()
         quotedTypes = ['"' + x + '"' for x in types]
 
-        [s, fexprValue] = self.overrideFunctions(fexpr, fexprValue, values)
+        [s, fexprValue, typeCheck] = self.overrideFunctions(fexpr, fexprValue, values)
         if s:
             return s
 
-        typeCheck = True
         if typeCheck:
             if len(values) > 0:
                 values = [''] + values # for starting ,
