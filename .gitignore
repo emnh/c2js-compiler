@@ -3,5 +3,6 @@
 /preamble.c.ast
 /output
 /inputs/test
-/inputs/test.c.js
+/inputs/test.js
+/lib/baselib.js
 *.ast
