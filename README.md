@@ -35,3 +35,5 @@ anything in a Web browser yet.
  - Goto
  - Async
  - Diff interpreter state
+  - [https://github.com/andreyvit/json-diff](json-diff)
+  - [https://github.com/qiao/difflib.js](difflib)
