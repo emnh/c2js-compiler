@@ -11,7 +11,32 @@ import os
 import sys
 import re
 import argparse
+import json
 from collections import Counter
+
+from addict import Dict
+
+halfLingASTMap = {
+        'ASTRootNode': 'root',
+        'TranslationUnitDecl': 'file',
+        'TypedefDecl': 'tdef',
+        'FunctionDecl': 'defn',
+        'IfStmt': '_if',
+        'ArraySubscriptExpr': 'sub',
+        'RecordDecl': 'rec',
+        'CompoundStmt': 'cs',
+        'DeclStmt': 'decl',
+        'VarDecl': '_var',
+        'ImplicitCastExpr': 'tc',
+        'DeclRefExpr': 'ref',
+        'ForStmt': '_for',
+        'BinaryOperator': 'op',
+        'UnaryOperator': 'up',
+        'ReturnStmt': 'ret',
+        'IntegerLiteral': 'V',
+        'NullStmt': 'null',
+        'CStyleCastExpr': 'tcc'
+        }
 
 defaultValues = {
     'int': '0',
@@ -101,6 +126,22 @@ class SourceLocation(object):
     def __str__(self):
         return str(self.filename) + ':' + str(self.line) + ':' + str(self.col) + ':' + str(self.valid)
 
+class HalfLingNode(object):
+    def __init__(self, astNode):
+        self.kind = astNode.kind
+        assert self.kind in halfLingASTMap, "halfling not there: " + str(astNode.__class__) + " " + str(self.kind)
+        self.fun = 'I.' + halfLingASTMap[self.kind]
+        self.debugInfo = Dict()
+        self.info = Dict()
+        self.children = []
+
+    def serialize(self):
+        debugJSON = json.dumps(self.debugInfo)
+        infoJSON = json.dumps(self.info)
+        childrenJSON = ','.join([x.serialize() for x in self.children])
+        childrenJSON = indent(childrenJSON)
+        s = '%s(%s, %s, \n%s)' % (self.fun, debugJSON, infoJSON, childrenJSON)
+
 class ASTNode(object):
 
     def __init__(self, opts):
@@ -131,6 +172,9 @@ class ASTNode(object):
         for child in self.children:
             for found in child.find(filter):
                 yield found
+
+    def filterTrash(self, node):
+        return node.kind == None or isinstance(node, ASTAttr)
 
     def getPosition(self):
         return [i for i, x in enumerate(self.parent.children) if x == self][0]
@@ -201,6 +245,16 @@ class ASTNode(object):
     def getValue(self):
         print 'warning, default handler for: ', self.kind
         return self.getChildValues()
+
+    def halfLingChildren(self):
+        children = [x.halfLing() for x in self.children if not self.filterTrash(x)]
+        return children
+
+    def halfLing(self):
+        print 'warning, default halfling handler for: ', self.kind
+        h = HalfLingNode(self)
+        h.children = self.halfLingChildren()
+        return h
 
     def getVarName(self):
         varNames = filter(lambda x: x[0] == '[0;1;36', self.lineByColor)
@@ -428,6 +482,8 @@ class ASTAttr(ASTNode):
         assert len(self.children) == 0
         return ''
 
+class AlwaysInlineAttr(ASTAttr):
+    pass
 
 class ArraySubscriptExpr(ASTNode):
 
@@ -789,6 +845,20 @@ class FunctionDecl(ASTNode):
     def isProtoType(self):
         return all(child.kind != 'CompoundStmt' for child in self.children)
 
+    def halfLing(self):
+        h = HalfLingNode(self)
+        #h.debugInfo.line = line
+        h.info.funName = self.getVarName()
+        fields = [x.getVarName() for x in self.children if x.kind == "ParmVarDecl"]
+        for i, field in enumerate(fields):
+            # prototypes can have unnamed arguments
+            if field == None:
+                fields[i] = '_'
+        h.info.varNames = fields
+        h.children = [x.halfLing() for x in self.children
+                if x.kind != "ParmVarDecl" and not self.filterTrash(x)]
+        return h
+
     def getValue(self):
         if not self.isProtoType():
             varName = self.getVarName()
@@ -993,7 +1063,7 @@ class RecordDecl(ASTNode):
                 return True
         return False
 
-    def getValue(self):
+    def getRecordNames(self):
         pos = self.getPosition()
         typeDefSibling = self.parent.children[pos + 1]
         # TODO: check that it overlaps with definition
@@ -1025,15 +1095,23 @@ class RecordDecl(ASTNode):
         if varName == None:
             print 'record None', self.rawline
 
+        return [varName, varName2]
+
+    def getSubrecords(self, halfling=False):
         subrecords = []
         subrecordValues = []
         for child in self.children:
             if child.kind == 'RecordDecl':
                 subrecord = child
                 subrecords.append(subrecord)
-                value = child.getValue()
+                if halfling:
+                    value = child.halfLing()
+                else:
+                    value = child.getValue()
                 subrecordValues.append(value)
+        return [subrecords, subrecordValues]
 
+    def getFields(self):
         fieldNodes = [x for x in self.children if x.kind == "FieldDecl"]
         fields = [x.getVarName() for x in fieldNodes]
         fields = [self.root.renameField(x) for x in fields]
@@ -1043,6 +1121,19 @@ class RecordDecl(ASTNode):
             if field == None:
                 fields[i] = '_'
         types = [x.getVarType() for x in self.children if x.kind == "FieldDecl"]
+        return [fieldNodes, fields, types]
+
+    def halfLing(self):
+        [varName, varName2] = self.getRecordNames()
+        [subrecords, subrecordValues] = self.getSubrecords(halfling=True)
+        [fieldNodes, fields, types] = self.getFields()
+
+    def getValue(self):
+
+        [varName, varName2] = self.getRecordNames()
+        [subrecords, subrecordValues] = self.getSubrecords()
+        [fieldNodes, fields, types] = self.getFields()
+
         if varName2 != None:
             s = 'var %s; var %s = %s = function(%s) {\n' % (varName2, varName, varName2, ', '.join(fields))
         else:
@@ -1522,7 +1613,8 @@ def main():
     parser = argparse.ArgumentParser(description='Convert C to JavaScript')
     parser.add_argument('sourceFiles', metavar='sourceFiles', type=str,
             nargs='+', help='C source files. file.c.ast must exist for each file.')
-    parser.add_argument('-o', dest='outputfile', type=str, help='output file')
+    parser.add_argument('-o', dest='outputfile', type=str, help='output file', required=True)
+    parser.add_argument('--halfling', dest='halfling', action='store_true', help='output file')
 
     args = parser.parse_args()
     scriptPath = os.path.dirname(os.path.realpath(__file__))
@@ -1541,26 +1633,32 @@ def main():
         #printKinds = PrintKinds(ast)
         #printKinds.printKinds()
 
+        if args.halfling:
+            value = ast.halfLing().serialize()
+        else:
+            value = ast.getValue()
         fd = file(outFileName, 'w')
-        print >>fd, ast.getValue()
+        print >>fd, value
         fd.close()
 
     # link
     finalOutFileName = args.outputfile
     outFileName = args.outputfile
-    preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
     sprintfPath = os.path.join(scriptPath, 'jscache', 'sprintf.js')
-    preamble = file(preamblePath).read()
     sprintf = file(sprintfPath).read()
     fd = file(finalOutFileName, 'w')
     print >>fd, 'var exports = {};'
     print >>fd, sprintf
-    print >>fd, preamble
+    if not args.halfling:
+        preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
+        preamble = file(preamblePath).read()
+        print >>fd, preamble
     for sourceFileName in sourceFileNames:
         outFileName = sourceToJS(sourceFileName)
         data = file(outFileName).read()
         print >>fd, data
-    print >>fd, "main();"
+    if not args.halfling:
+        print >>fd, "main();"
 
 
 if __name__ == '__main__':

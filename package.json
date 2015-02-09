@@ -1,0 +1,34 @@
+{
+  "name": "c2js-compiler",
+  "version": "0.0.1",
+  "description": "C to JavaScript compiler",
+  "author": "Eivind Magnus Hvidevold <hvidevold@gmail.com>",
+  "bin": {
+    "module-name": "./bin/module-name"
+  },
+  "scripts": {
+  },
+  "main": "jsrewriter.py",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emnh/c2js-compiler"
+  },
+  "bugs": {
+    "url": "https://github.com/emnh/c2js-compiler/issues"
+  },
+  "keywords": [
+    "compiler"
+  ],
+  "dependencies": {
+    "jquery": "*",
+    "6to5": "*",
+    "browserify": "*",
+    "6to5ify": "*"
+  },
+  "devDependencies": {
+  },
+  "preferGlobal": true,
+  "private": true,
+  "license": "GPL"
+}
+  

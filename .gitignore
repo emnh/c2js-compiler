@@ -6,3 +6,5 @@
 /inputs/test.js
 /lib/baselib.js
 *.ast
+/node_modules
+/tmp

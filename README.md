@@ -23,7 +23,15 @@ anything in a Web browser yet.
  - Goto statements and labels.
  - JavaScript to C source maps.
  - Resolve variable type issues, JavaScript string versus char\* etc.
- -
  - Compile musl (light libc) and get libraries from Emscripten.
  - Implement filesystem (can probably borrow from Emscripten). Use browserfs.
  - Compile simple tool and try to run.
+
+# TODO Half-ling
+ - Next version: Hazy Halfling, supporting goto and async
+ - Interactive timelapse and debugger
+ - Convert to half-ling AST from clang AST
+ - Return, break, continue
+ - Goto
+ - Async
+ - Diff interpreter state

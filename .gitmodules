@@ -1,0 +1,6 @@
+[submodule "coffee-lib"]
+	path = coffee-lib
+	url = https://github.com/emnh/coffee-lib
+[submodule "addict"]
+	path = addict
+	url = https://github.com/mewwts/addict
