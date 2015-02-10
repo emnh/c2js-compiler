@@ -14,6 +14,9 @@ import argparse
 import json
 from collections import Counter
 
+scriptPath = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(os.path.join(scriptPath, 'addict'))
+
 from addict import Dict
 
 halfLingASTMap = {
@@ -35,7 +38,22 @@ halfLingASTMap = {
         'ReturnStmt': 'ret',
         'IntegerLiteral': 'V',
         'NullStmt': 'null',
-        'CStyleCastExpr': 'tcc'
+        'CStyleCastExpr': 'tcc',
+        'EnumDecl': 'enum',
+        'EnumConstantDecl': 'enum_decl',
+        'CompoundAssignOperator': 'assign',
+        'ParenExpr': 'p',
+        'WhileStmt': '_while',
+        'SwitchStmt': '_switch',
+        'CaseStmt': '_case',
+        'BreakStmt': '_break',
+        'DefaultStmt': 'default',
+        'CallExpr': 'call',
+        'StringLiteral': 'str',
+        'MemberExpr': 'm',
+        'UnaryExprOrTypeTraitExpr': 'sz',
+        'InitListExpr': 'init',
+        'VAArgExpr': 'va',
         }
 
 defaultValues = {
@@ -138,9 +156,27 @@ class HalfLingNode(object):
     def serialize(self):
         debugJSON = json.dumps(self.debugInfo)
         infoJSON = json.dumps(self.info)
-        childrenJSON = ','.join([x.serialize() for x in self.children])
+        s = 'serializing halfling %s' % (str(self.kind))
+        print s
+        for x in self.children:
+            try:
+                isinstance(x, HalfLingNullNode)
+            except TypeError, e:
+                s = 'None-child "%s" of %s %s' % (str(x), str(self.__class__), str(self.kind))
+                assert False, s
+        childrenJSON = ',\n'.join(
+                [x.serialize() for x in self.children
+                if not isinstance(x, HalfLingNullNode)])
         childrenJSON = indent(childrenJSON)
-        s = '%s(%s, %s, \n%s)' % (self.fun, debugJSON, infoJSON, childrenJSON)
+        s = '%s(%s, %s, \n[%s])' % (self.fun, debugJSON, infoJSON, childrenJSON)
+        if self.kind == 'ASTRootNode':
+            s = 'programs[programCounter++] = ' + s
+        return s
+
+class HalfLingNullNode(object):
+    def __init__(self, astNode):
+        self.astNode = astNode
+
 
 class ASTNode(object):
 
@@ -845,30 +881,32 @@ class FunctionDecl(ASTNode):
     def isProtoType(self):
         return all(child.kind != 'CompoundStmt' for child in self.children)
 
-    def halfLing(self):
-        h = HalfLingNode(self)
-        #h.debugInfo.line = line
-        h.info.funName = self.getVarName()
+    def getFields(self):
         fields = [x.getVarName() for x in self.children if x.kind == "ParmVarDecl"]
         for i, field in enumerate(fields):
             # prototypes can have unnamed arguments
             if field == None:
                 fields[i] = '_'
-        h.info.varNames = fields
-        h.children = [x.halfLing() for x in self.children
-                if x.kind != "ParmVarDecl" and not self.filterTrash(x)]
-        return h
+        return fields
+
+    def halfLing(self):
+        if self.isProtoType():
+            h = HalfLingNullNode(self)
+            return h
+        else:
+            h = HalfLingNode(self)
+            #h.debugInfo.line = line
+            h.info.funName = self.getVarName()
+            h.info.varNames = self.getFields()
+            h.children = [x.halfLing() for x in self.children
+                    if x.kind != "ParmVarDecl" and not self.filterTrash(x)]
+            return h
 
     def getValue(self):
         if not self.isProtoType():
             varName = self.getVarName()
             if varName != None:
-                fields = [x.getVarName() for x in self.children if x.kind == "ParmVarDecl"]
-                for i, field in enumerate(fields):
-                    # prototypes can have unnamed arguments
-                    if field == None:
-                        fields[i] = '_'
-
+                fields = self.getFields()
                 result = self.getVarNames()
                 if not result['shadowVars']:
                     for var in result['variables']:
@@ -1052,7 +1090,9 @@ class ParmVarDecl(ASTNode):
 class PredefinedExpr(ASTNode): pass
 class PureAttr(ASTAttr): pass
 
-# TODO: handle nested RecordDecl
+class RecordDeclOpts(object):
+    pass
+
 class RecordDecl(ASTNode):
 
     def isSubRecord(self):
@@ -1104,10 +1144,7 @@ class RecordDecl(ASTNode):
             if child.kind == 'RecordDecl':
                 subrecord = child
                 subrecords.append(subrecord)
-                if halfling:
-                    value = child.halfLing()
-                else:
-                    value = child.getValue()
+                value = child.getValue()
                 subrecordValues.append(value)
         return [subrecords, subrecordValues]
 
@@ -1123,36 +1160,29 @@ class RecordDecl(ASTNode):
         types = [x.getVarType() for x in self.children if x.kind == "FieldDecl"]
         return [fieldNodes, fields, types]
 
-    def halfLing(self):
-        [varName, varName2] = self.getRecordNames()
-        [subrecords, subrecordValues] = self.getSubrecords(halfling=True)
-        [fieldNodes, fields, types] = self.getFields()
+    def getSharedValue(self, opts, halfling = False):
+        s = ''
+        if not halfling:
+            if opts.varName2 != None:
+                s = 'var %s; var %s = %s = ' % (opts.varName2, opts.varName, opts.varName2)
+            else:
+                s = 'var %s = ' % (opts.varName)
 
-    def getValue(self):
-
-        [varName, varName2] = self.getRecordNames()
-        [subrecords, subrecordValues] = self.getSubrecords()
-        [fieldNodes, fields, types] = self.getFields()
-
-        if varName2 != None:
-            s = 'var %s; var %s = %s = function(%s) {\n' % (varName2, varName, varName2, ', '.join(fields))
-        else:
-            s = 'var %s = function(%s) {\n' % (varName, ', '.join(fields))
+        s += 'function(%s) {\n' % (', '.join(opts.fields))
         body = ''
-        # TODO: resolve type and lookup initializer
-        for field, node, t in zip(fields, fieldNodes, types):
+        for field, node, t in zip(opts.fields, opts.fieldNodes, opts.types):
             initializer = self.root.getDefaultInitializer(t)
             if 'anonymous' in initializer:
                 assert node.processed == True
             else:
                 body += 'this.%s = %s || %s;\n' % (field, field, initializer)
         # TODO: emit subrecord in the order specified
-        for subrecord, value in zip(subrecords, subrecordValues):
+        for subrecord, value in zip(opts.subrecords, opts.subrecordValues):
             body += indent(value)
             body += 'this.%s = new %s();' % (subrecord.recordName, subrecord.recordName)
         casesRead = ''
         casesWrite = ''
-        for i, field in enumerate(fields):
+        for i, field in enumerate(opts.fields):
             casesRead += 'case %d: return eval(_r1(\'_record.%s\')); break;\n' % (i, field)
         body += '''
 this.length = %d;
@@ -1162,10 +1192,36 @@ this._s1 = function(i) {
         %s
     }
 }
-''' % (len(fields), casesRead)
+''' % (len(opts.fields), casesRead)
         s += indent(body)
         s += '}\n'
         return s
+
+    def halfLing(self):
+        h = HalfLingNode(self)
+        o = RecordDeclOpts()
+        [o.varName, o.varName2] = self.getRecordNames()
+        [o.subrecords, o.subrecordValues] = self.getSubrecords(halfling=True)
+        [o.fieldNodes, o.fields, o.types] = self.getFields()
+
+        varNames = []
+        if o.varName != None:
+            varNames.append(o.varName)
+        if o.varName2 != None:
+            varNames.append(o.varName2)
+
+        h.info.varNames = varNames
+        h.info.declaration = self.getSharedValue(o, halfling=True)
+        h.info.fields = o.fields
+
+        return h
+
+    def getValue(self):
+        o = RecordDeclOpts()
+        [o.varName, o.varName2] = self.getRecordNames()
+        [o.subrecords, o.subrecordValues] = self.getSubrecords()
+        [o.fieldNodes, o.fields, o.types] = self.getFields()
+        return self.getSharedValue(o)
 
     def rewrite(self, replacer):
         ext = self.getExtent()
@@ -1617,7 +1673,6 @@ def main():
     parser.add_argument('--halfling', dest='halfling', action='store_true', help='output file')
 
     args = parser.parse_args()
-    scriptPath = os.path.dirname(os.path.realpath(__file__))
 
     sourceFileNames = [os.path.join(scriptPath, 'lib', 'baselib.c')]
     sourceFileNames += args.sourceFiles
@@ -1651,6 +1706,10 @@ def main():
     print >>fd, sprintf
     if not args.halfling:
         preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
+        preamble = file(preamblePath).read()
+        print >>fd, preamble
+    else:
+        preamblePath = os.path.join(scriptPath, 'lib', 'preamble-halfling.js')
         preamble = file(preamblePath).read()
         print >>fd, preamble
     for sourceFileName in sourceFileNames:

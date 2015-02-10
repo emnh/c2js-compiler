@@ -1,4 +1,19 @@
+table.DOMLogger caption {
+  color: blue;
+  font-size: 12px;
+  border: 1px solid blue;
+  padding-left: 10px;
+  padding-right: 10px;
+  background: lightgray;
+}
 table.DOMLogger {
   border: 1px solid black;
-  padding: 5px;
+  padding: 0px;
+  padding-left: 40px;
+  margin: 0px;
+}
+.DOMLogger * {
+  border: 0px;
+  padding: 0px;
+  margin: 0px;
 }
