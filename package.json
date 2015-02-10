@@ -25,7 +25,8 @@
     "browserify": "*",
     "6to5ify": "*",
     "setimmediate": "*",
-    "suspend": "*"
+    "suspend": "*",
+    "q": "*"
   },
   "devDependencies": {
   },

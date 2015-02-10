@@ -29,7 +29,7 @@ halfLingASTMap = {
         'RecordDecl': 'rec',
         'CompoundStmt': 'cs',
         'DeclStmt': 'decl',
-        'VarDecl': '_var',
+        'VarDecl': 'def',
         'ImplicitCastExpr': 'tc',
         'DeclRefExpr': 'ref',
         'ForStmt': '_for',
@@ -149,12 +149,12 @@ class HalfLingNode(object):
     def __init__(self, astNode):
         self.kind = astNode.kind
         assert self.kind in halfLingASTMap, "halfling not there: " + str(astNode.__class__) + " " + str(self.kind)
-        self.fun = 'I.' + halfLingASTMap[self.kind]
         self.debugInfo = Dict()
         self.info = Dict()
         self.children = []
 
     def serialize(self):
+        self.fun = 'I.' + halfLingASTMap[self.kind]
         debugJSON = json.dumps(self.debugInfo)
         infoJSON = json.dumps(self.info)
         s = 'serializing halfling %s' % (str(self.kind))
@@ -445,6 +445,35 @@ class ASTRootNode(ASTNode):
             primType = self.removeOtherSpecifiers(primType)
         return primType
 
+    def getHalfLingDefaultInitializer(self, varType):
+        if '*' in varType:
+            initializer = '0'
+        else:
+            varType = self.resolveType(varType)
+            #print 'resolve: ', varType
+            primType = self.removeSignSpecifier(varType) #.split(' ')[-1]
+            # TODO: multidim arrays
+            arraySize = self.getLengthSpecifier(varType)
+            if arraySize:
+                primType = self.resolvePrimType(varType)
+                #print "array", varType, primType, arraySize
+                if primType in defaultValues:
+                    defaultValue = defaultValues[primType]
+                    initializer = 'C.fillArray(%s, %d)' % (defaultValue, arraySize)
+                else:
+                    if primType == '__va_list_tag':
+                        initializer = 'new %s()' % (primType)
+                    else:
+                        assert primType != 'void'
+                        initializer = 'C.typedArray(%s, %d)' % (primType, arraySize)
+            elif primType in defaultValues:
+                initializer = defaultValues[primType]
+            else:
+                initializer = 'new %s()' % self.removeGeneralType(varType)
+        return initializer
+
+        pass
+
     def getDefaultInitializer(self, varType):
         if '*' in varType:
             initializer = '_n'
@@ -714,6 +743,7 @@ class CallExpr(ASTNode):
         print 'fexprValue', fexprValue
         if fexprValue in ['printf', 'puts']:
             h.kind = 'jsfun'
+            h.children[0] = fexprValue
         return h
 
 
@@ -1439,6 +1469,19 @@ class VarDecl(ASTNode):
     def __init__(self, d):
         super(VarDecl, self).__init__(d)
         self.declared = False
+
+    def halfLing(self):
+        h = HalfLingNode(self)
+        varName = self.getVarName()
+        value = self.getValue()
+        if len(self.children) > 0:
+            assert len(self.children) == 1
+            child = self.children[0]
+            child = child.halfLing()
+        else:
+            child = '0' #self.root.getHalfLingDefaultInitializer()
+        h.children = [varName, child]
+        return h
 
     def getValue(self):
         varName = self.getVarName()
