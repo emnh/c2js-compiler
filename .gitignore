@@ -8,3 +8,4 @@
 *.ast
 /node_modules
 /tmp
+/lib/bundle.js

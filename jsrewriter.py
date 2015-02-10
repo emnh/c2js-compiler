@@ -25,7 +25,7 @@ halfLingASTMap = {
         'TypedefDecl': 'tdef',
         'FunctionDecl': 'defn',
         'IfStmt': '_if',
-        'ArraySubscriptExpr': 'sub',
+        'ArraySubscriptExpr': 'geti',
         'RecordDecl': 'rec',
         'CompoundStmt': 'cs',
         'DeclStmt': 'decl',
@@ -36,24 +36,25 @@ halfLingASTMap = {
         'BinaryOperator': 'op',
         'UnaryOperator': 'up',
         'ReturnStmt': 'ret',
-        'IntegerLiteral': 'V',
+        'IntegerLiteral': 'i',
         'NullStmt': 'null',
         'CStyleCastExpr': 'tcc',
         'EnumDecl': 'enum',
-        'EnumConstantDecl': 'enum_decl',
+        'EnumConstantDecl': 'edecl',
         'CompoundAssignOperator': 'assign',
         'ParenExpr': 'p',
         'WhileStmt': '_while',
         'SwitchStmt': '_switch',
         'CaseStmt': '_case',
         'BreakStmt': '_break',
-        'DefaultStmt': 'default',
+        'DefaultStmt': '_default',
         'CallExpr': 'call',
         'StringLiteral': 'str',
         'MemberExpr': 'm',
         'UnaryExprOrTypeTraitExpr': 'sz',
         'InitListExpr': 'init',
         'VAArgExpr': 'va',
+        'jsfun': 'jsfun'
         }
 
 defaultValues = {
@@ -158,15 +159,15 @@ class HalfLingNode(object):
         infoJSON = json.dumps(self.info)
         s = 'serializing halfling %s' % (str(self.kind))
         print s
-        for x in self.children:
-            try:
-                isinstance(x, HalfLingNullNode)
-            except TypeError, e:
-                s = 'None-child "%s" of %s %s' % (str(x), str(self.__class__), str(self.kind))
-                assert False, s
-        childrenJSON = ',\n'.join(
-                [x.serialize() for x in self.children
-                if not isinstance(x, HalfLingNullNode)])
+        children = []
+        for child in self.children:
+            if isinstance(child, HalfLingNullNode):
+                continue
+            elif isinstance(child, HalfLingNode):
+                children.append(child.serialize())
+            else:
+                children.append(json.dumps(child))
+        childrenJSON = ',\n'.join(children)
         childrenJSON = indent(childrenJSON)
         s = '%s(%s, %s, \n[%s])' % (self.fun, debugJSON, infoJSON, childrenJSON)
         if self.kind == 'ASTRootNode':
@@ -705,6 +706,17 @@ class CallExpr(ASTNode):
         #print 'call ', s
         return s
 
+    def halfLing(self):
+        h = HalfLingNode(self)
+        fexpr = self.children[0]
+        fexprValue = fexpr.getValue()
+        h.children = self.halfLingChildren()
+        print 'fexprValue', fexprValue
+        if fexprValue in ['printf', 'puts']:
+            h.kind = 'jsfun'
+        return h
+
+
 class CaseStmt(ASTNode):
 
     def getValue(self):
@@ -782,6 +794,12 @@ class CStyleCastExpr(ASTNode):
         return self.getChildValues()
 
 class DeclRefExpr(ASTNode):
+
+    def halfLing(self):
+        h = HalfLingNode(self)
+        h.children = [self.getVarName()]
+        return h
+
     def getValue(self):
         varname = self.getVarName()
         return varname
@@ -1293,6 +1311,9 @@ class TranslationUnitDecl(ASTNode):
 class TransparentUnionAttr(ASTAttr): pass
 
 class TypedefDecl(ASTNode):
+    def halfLing(self):
+        return HalfLingNullNode(self)
+
     def getValue(self):
         typeName = self.getVarName()
         typeDef = self.getVarType()
@@ -1704,21 +1725,29 @@ def main():
     fd = file(finalOutFileName, 'w')
     print >>fd, 'var exports = {};'
     print >>fd, sprintf
-    if not args.halfling:
-        preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
-        preamble = file(preamblePath).read()
-        print >>fd, preamble
-    else:
-        preamblePath = os.path.join(scriptPath, 'lib', 'preamble-halfling.js')
-        preamble = file(preamblePath).read()
-        print >>fd, preamble
+    preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
+    preamble = file(preamblePath).read()
+    print >>fd, preamble
+    if args.halfling:
+        #preamblePath = os.path.join(scriptPath, 'lib', 'preamble-halfling.js')
+        #preamble = file(preamblePath).read()
+        #print >>fd, preamble
+        print >>fd, 'function getPrograms() {'
+        print >>fd, 'var programs = [];'
+        print >>fd, 'var programCounter = [];'
+        print >>fd, 'var I = new Interpreter();'
     for sourceFileName in sourceFileNames:
         outFileName = sourceToJS(sourceFileName)
         data = file(outFileName).read()
+        if args.halfling:
+            data = indent(data)
         print >>fd, data
     if not args.halfling:
         print >>fd, "main();"
-
+    else:
+        print >> fd, indent('return [programs, I];')
+        print >> fd, '}'
+        print >>fd, '$(() => runMain());'
 
 if __name__ == '__main__':
     main()

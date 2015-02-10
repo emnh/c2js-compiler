@@ -23,7 +23,9 @@
     "jquery": "*",
     "6to5": "*",
     "browserify": "*",
-    "6to5ify": "*"
+    "6to5ify": "*",
+    "setimmediate": "*",
+    "suspend": "*"
   },
   "devDependencies": {
   },

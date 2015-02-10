@@ -11,9 +11,15 @@ table.DOMLogger {
   padding: 0px;
   padding-left: 40px;
   margin: 0px;
+  max-width: 50px;
+  overflow: scroll;
 }
 .DOMLogger * {
   border: 0px;
   padding: 0px;
   margin: 0px;
+}
+#frame {
+  position: absolute;
+  left: 200px;
 }
