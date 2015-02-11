@@ -13,6 +13,7 @@ import re
 import argparse
 import json
 from collections import Counter
+import collections
 
 scriptPath = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(scriptPath, 'addict'))
@@ -27,10 +28,10 @@ halfLingASTMap = {
         'IfStmt': '_if',
         'ArraySubscriptExpr': 'geti',
         'RecordDecl': 'rec',
-        'CompoundStmt': 'cs',
+        'CompoundStmt': 'compound',
         'DeclStmt': 'decl',
         'VarDecl': 'def',
-        'ImplicitCastExpr': 'tc',
+        'ImplicitCastExpr': 'c',
         'DeclRefExpr': 'ref',
         'ForStmt': '_for',
         'BinaryOperator': 'op',
@@ -38,7 +39,7 @@ halfLingASTMap = {
         'ReturnStmt': 'ret',
         'IntegerLiteral': 'i',
         'NullStmt': 'null',
-        'CStyleCastExpr': 'tcc',
+        'CStyleCastExpr': 'cc',
         'EnumDecl': 'enum',
         'EnumConstantDecl': 'edecl',
         'CompoundAssignOperator': 'assign',
@@ -54,7 +55,10 @@ halfLingASTMap = {
         'UnaryExprOrTypeTraitExpr': 'sz',
         'InitListExpr': 'init',
         'VAArgExpr': 'va',
-        'jsfun': 'jsfun'
+        'jsfun': 'jsfun',
+        'val': 'val',
+        'new': '_new',
+        'FieldDecl': 'field'
         }
 
 defaultValues = {
@@ -146,12 +150,18 @@ class SourceLocation(object):
         return str(self.filename) + ':' + str(self.line) + ':' + str(self.col) + ':' + str(self.valid)
 
 class HalfLingNode(object):
-    def __init__(self, astNode):
-        self.kind = astNode.kind
-        assert self.kind in halfLingASTMap, "halfling not there: " + str(astNode.__class__) + " " + str(self.kind)
+    def __init__(self, *args):
+        if len(args) == 1 and isinstance(args[0], ASTNode):
+            astNode = args[0]
+            self.kind = astNode.kind
+            assert self.kind in halfLingASTMap, "halfling not there: " + str(astNode.__class__) + " " + str(self.kind)
+            self.children = []
+        else:
+            [astNode, kind, children] = args
+            self.kind = kind
+            self.children = children
         self.debugInfo = Dict()
         self.info = Dict()
-        self.children = []
 
     def serialize(self):
         self.fun = 'I.' + halfLingASTMap[self.kind]
@@ -165,6 +175,10 @@ class HalfLingNode(object):
                 continue
             elif isinstance(child, HalfLingNode):
                 children.append(child.serialize())
+            elif not isinstance(child, basestring) and isinstance(child, collections.Sequence):
+                print self.children
+                print child
+                raise Exception("child should not be a list")
             else:
                 children.append(json.dumps(child))
         childrenJSON = ',\n'.join(children)
@@ -174,10 +188,36 @@ class HalfLingNode(object):
             s = 'programs[programCounter++] = ' + s
         return s
 
+
+class HalfLingNew(HalfLingNode):
+
+    def __init__(self, astNode, recName, args):
+        super(HalfLingNew, self).__init__(astNode, 'new', [recName] + args)
+
+class HalfLingJSFun(HalfLingNode):
+
+    def __init__(self, astNode, fName, args):
+        super(HalfLingJSFun, self).__init__(astNode, 'jsfun', [fName] + args)
+
+class HalfLingRef(HalfLingNode):
+
+    def __init__(self, astNode, varName):
+        super(HalfLingRef, self).__init__(astNode, 'DeclRefExpr', [varName])
+
+class HalfLingRValueRef(HalfLingNode):
+
+    def __init__(self, astNode, varName):
+        super(HalfLingRValueRef, self).__init__(astNode, 'ImplicitCastExpr', [])
+        self.children = [HalfLingRef(astNode, varName)]
+        self.info.l2r = True
+
+class HVal(HalfLingNode):
+    def __init__(self, astNode, value):
+        super(HVal, self).__init__(astNode, 'val', [value])
+
 class HalfLingNullNode(object):
     def __init__(self, astNode):
         self.astNode = astNode
-
 
 class ASTNode(object):
 
@@ -447,7 +487,7 @@ class ASTRootNode(ASTNode):
 
     def getHalfLingDefaultInitializer(self, varType):
         if '*' in varType:
-            initializer = '0'
+            initializer = HalfLingJSFun(self, 'C.nullPointer', [])
         else:
             varType = self.resolveType(varType)
             #print 'resolve: ', varType
@@ -459,20 +499,23 @@ class ASTRootNode(ASTNode):
                 #print "array", varType, primType, arraySize
                 if primType in defaultValues:
                     defaultValue = defaultValues[primType]
-                    initializer = 'C.fillArray(%s, %d)' % (defaultValue, arraySize)
+                    #initializer = 'C.fillArray(%s, %d)' % (defaultValue, arraySize)
+                    args = [HVal(self, defaultValue), HVal(self, arraySize)]
+                    initializer = HalfLingJSFun(self, 'C.fillArray', args)
                 else:
                     if primType == '__va_list_tag':
-                        initializer = 'new %s()' % (primType)
+                        args = [HalfLingRValueRef(self, primType)]
+                        initializer = HalfLingJSFun(self, 'C.create', args)
                     else:
                         assert primType != 'void'
-                        initializer = 'C.typedArray(%s, %d)' % (primType, arraySize)
+                        args = [HalfLingRValueRef(self, primType), HVal(self, arraySize)]
+                        initializer = HalfLingJSFun(self, 'C.typedArray', args)
             elif primType in defaultValues:
-                initializer = defaultValues[primType]
+                initializer = HVal(self, defaultValues[primType])
             else:
-                initializer = 'new %s()' % self.removeGeneralType(varType)
+                recordName = self.removeGeneralType(varType)
+                initializer = HalfLingNew(self, recordName, [])
         return initializer
-
-        pass
 
     def getDefaultInitializer(self, varType):
         if '*' in varType:
@@ -634,6 +677,12 @@ class BinaryOperator(ASTNode):
                 return s % (ptr, other)
         return None
 
+    def halfLing(self):
+        h = HalfLingNode(self)
+        operator = self.getOperator()
+        h.children = [operator] + [x.halfLing() for x in self.children]
+        return h
+
     def getValue(self):
         c1, c2 = self.children
         val1 = c1.getValue()
@@ -744,6 +793,8 @@ class CallExpr(ASTNode):
         if fexprValue in ['printf', 'puts']:
             h.kind = 'jsfun'
             h.children[0] = fexprValue
+        elif h.children[0].kind == 'ImplicitCastExpr':
+            h.children[0].info.l2r = True
         return h
 
 
@@ -898,7 +949,14 @@ class EnumDecl(ASTNode):
 
 # Handled as part of RecordDecl
 class FieldDecl(ASTNode):
-    pass
+    def halfLing(self):
+        h = HalfLingNode(self)
+        h.info.varNames = [self.getVarName()]
+        varType = self.getVarType()
+        h.children = [self.root.getHalfLingDefaultInitializer(varType)]
+        print h.children
+        return h
+
 class Field(ASTNode):
     pass
 
@@ -1030,6 +1088,15 @@ class IfStmt(ASTNode):
         return s
 
 class ImplicitCastExpr(ASTNode):
+    def halfLing(self):
+        h = HalfLingNode(self)
+        if 'LValueToRValue' in self.line:
+            h.info.l2r = True
+        else:
+            h.info.l2r = False
+        h.children = self.halfLingChildren()
+        return h
+
     def getValue(self):
         return self.getChildValues()
 
@@ -1078,6 +1145,14 @@ class LabelStmt(ASTNode): pass
 class MallocAttr(ASTAttr): pass
 
 class MemberExpr(ASTNode):
+
+    def halfLing(self):
+        member = self.getMember()
+        member = self.root.renameField(member)
+        h = HalfLingNode(self)
+        h.children = self.halfLingChildren()
+        h.info.member = member
+        return h
 
     def getValue(self):
         member = self.getMember()
@@ -1192,7 +1267,10 @@ class RecordDecl(ASTNode):
             if child.kind == 'RecordDecl':
                 subrecord = child
                 subrecords.append(subrecord)
-                value = child.getValue()
+                if halfling:
+                    value = child.halfLing()
+                else:
+                    value = child.getValue()
                 subrecordValues.append(value)
         return [subrecords, subrecordValues]
 
@@ -1258,9 +1336,12 @@ this._s1 = function(i) {
         if o.varName2 != None:
             varNames.append(o.varName2)
 
+        children = self.halfLingChildren()
+
         h.info.varNames = varNames
-        h.info.declaration = self.getSharedValue(o, halfling=True)
+        #h.info.declaration = self.getSharedValue(o, halfling=True)
         h.info.fields = o.fields
+        h.children = children
 
         return h
 
@@ -1315,6 +1396,12 @@ class StmtExpr(ASTNode):
         return self.getChildValues()
 
 class StringLiteral(ASTNode):
+    def halfLing(self):
+        value = self.getVarName()
+        value = HVal(self, value)
+        h = HalfLingJSFun(self, "_r3", [value])
+        return h
+
     def getValue(self):
         s = '_r3(%s)' % self.getVarName()
         return s
@@ -1469,18 +1556,29 @@ class VarDecl(ASTNode):
     def __init__(self, d):
         super(VarDecl, self).__init__(d)
         self.declared = False
+        self.declaredHalfLing = False
 
     def halfLing(self):
         h = HalfLingNode(self)
         varName = self.getVarName()
         value = self.getValue()
+        varType = self.getVarType()
         if len(self.children) > 0:
             assert len(self.children) == 1
             child = self.children[0]
             child = child.halfLing()
+            if not 'extern' in self.line:
+                if not self.declaredHalfLing:
+                    self.declaredHalfLing = True
+                else:
+                    varRef = HalfLingNode(self, 'DeclRefExpr', varName)
+                    h = HalfLingNode(self, 'BinaryOperator', ['=', varRef, child])
+            else:
+                assert False, (varName, expr)
         else:
-            child = '0' #self.root.getHalfLingDefaultInitializer()
-        h.children = [varName, child]
+            if not 'extern' in self.line:
+                child = self.root.getHalfLingDefaultInitializer(varType)
+                h.children = [varName, child]
         return h
 
     def getValue(self):
@@ -1763,15 +1861,18 @@ def main():
     # link
     finalOutFileName = args.outputfile
     outFileName = args.outputfile
-    sprintfPath = os.path.join(scriptPath, 'jscache', 'sprintf.js')
-    sprintf = file(sprintfPath).read()
     fd = file(finalOutFileName, 'w')
     print >>fd, 'var exports = {};'
-    print >>fd, sprintf
-    preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
-    preamble = file(preamblePath).read()
-    print >>fd, preamble
-    if args.halfling:
+
+    if not args.halfling:
+        sprintfPath = os.path.join(scriptPath, 'jscache', 'sprintf.js')
+        sprintf = file(sprintfPath).read()
+        print >>fd, sprintf
+
+        preamblePath = os.path.join(scriptPath, 'lib', 'preamble.js')
+        preamble = file(preamblePath).read()
+        print >>fd, preamble
+    elif args.halfling:
         #preamblePath = os.path.join(scriptPath, 'lib', 'preamble-halfling.js')
         #preamble = file(preamblePath).read()
         #print >>fd, preamble

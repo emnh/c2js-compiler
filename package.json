@@ -26,7 +26,8 @@
     "6to5ify": "*",
     "setimmediate": "*",
     "suspend": "*",
-    "q": "*"
+    "q": "*",
+    "sprintf-js": "*"
   },
   "devDependencies": {
   },
