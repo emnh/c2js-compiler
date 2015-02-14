@@ -45,56 +45,72 @@ void bang(int* a, int v) {
     }
 }
 
+void error(char* message) {
+  puts(message);
+}
+
+char buffer[1000];
+
+void easy() {
+  int a = 2;
+  a = 3;
+  printf("a: 3 == %d\n", a);
+}
+
 void structs() {
   lval_T param;
-  printf("lval_T: %d\n", param.b);
+  printf("lval_T: 0 == %d\n", param.b);
   param.b = 2;
-  printf("lval_T: %d\n", param.b);
-  printf("lval_T size: %d\n", sizeof(param));
+  printf("lval_T: 2 == %d\n", param.b);
+  printf("lval_T size: 4 == %d\n", sizeof(param));
 
   lval_T params[10];
   params[0] = param;
-  printf("lval_T: %d\n", param.b);
+  printf("lval_T.b: 2 == %d\n", param.b);
 
   lval_T param2 = {0, 0, "helo"};
-  printf("lval_T.c: %s\n", param2.c);
+  printf("lval_T.c: helo == %s\n", param2.c);
 }
 
 void pointers() {
   char* u = "test";
   char** ptr = &u;
-  printf("%s", u);
+  printf("test == %s\n", u);
   *ptr = "blah";
-  printf("%s\n", u);
+  printf("blah == %s\n", u);
 
   char* v[2] = { "string1", "string2" };
   char** v2 = v;
-  printf("%s\n", *v2);
+  printf("string1 == %s\n", *v2);
   
   int x[2] = { 23, 32 };
   int* x2 = x;
-  printf("%d\n", *x2);
-  printf("%d\n", x2[0]);
+  printf("23 == %d\n", *x2);
+  printf("23 == %d\n", x2[0]);
   x[0] = 45;
   x[1] = 56;
-  printf("%d\n", *(x2++));
-  printf("%d\n", *x2);
-  printf("%d\n", x2[0]);
+  printf("45 == %d\n", *(x2++));
+  printf("56 == %d\n", *x2);
+  printf("56 == %d\n", x2[0]);
 
   char* nul1 = NULL;
   char* nul2 = 0;
   if (nul1 == NULL) {
-    puts("nul1 == null");
+    puts("null == null");
   }
   if (nul2 == NULL) {
-    puts("nul2 == null");
+    puts("null == null");
   }
   if (u == NULL) {
     puts("ERROR: u == null");
   }
 
+  if (u == "test") {
+    puts("ERROR: u == test");
+  }
+
   if ("test" == "test") {
-    puts("Good: test");
+    puts("test == test");
   }
   if ("test" != "test") {
     puts("ERROR: test");
@@ -107,8 +123,8 @@ void pointers() {
 void functions() {
   lval_T param;
   memset(&param, 2, sizeof(param));
-  printf("lval_T: %d\n", param.b);
-  printf("lval_T: %d\n", (&param)->b);
+  printf("lval_T.b: %d\n", param.b);
+  printf("lval_T.b: %d\n", (&param)->b);
   // error currently
   //printf("lval_T: %d\n", (*(&param)).b);
   
@@ -141,6 +157,7 @@ void printargs(int arg1, ...)
 }
 
 int main(int argc, char** argv) {
+  easy();
   structs();
   pointers();
   functions();

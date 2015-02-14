@@ -26,7 +26,7 @@ halfLingASTMap = {
         'TypedefDecl': 'tdef',
         'FunctionDecl': 'defn',
         'IfStmt': '_if',
-        'ArraySubscriptExpr': 'geti',
+        'ArraySubscriptExpr': 'subscript',
         'RecordDecl': 'rec',
         'CompoundStmt': 'compound',
         'DeclStmt': 'decl',
@@ -39,6 +39,7 @@ halfLingASTMap = {
         'ReturnStmt': 'ret',
         'IntegerLiteral': 'i',
         'NullStmt': 'null',
+        None: 'null',
         'CStyleCastExpr': 'cc',
         'EnumDecl': 'enum',
         'EnumConstantDecl': 'edecl',
@@ -58,7 +59,10 @@ halfLingASTMap = {
         'jsfun': 'jsfun',
         'val': 'val',
         'new': '_new',
-        'FieldDecl': 'field'
+        'FieldDecl': 'field',
+        'typed_array': 'typed_array',
+        'fill_array': 'fill_array',
+        'null_ptr': 'null_ptr'
         }
 
 defaultValues = {
@@ -188,6 +192,18 @@ class HalfLingNode(object):
             s = 'programs[programCounter++] = ' + s
         return s
 
+
+class HalfLingNullPointer(HalfLingNode):
+    def __init__(self, astNode):
+        super(HalfLingNullPointer, self).__init__(astNode, 'null_ptr', [])
+
+class HalfLingFillArray(HalfLingNode):
+    def __init__(self, astNode, args):
+        super(HalfLingFillArray, self).__init__(astNode, 'fill_array', args)
+
+class HalfLingTypedArray(HalfLingNode):
+    def __init__(self, astNode, args):
+        super(HalfLingTypedArray, self).__init__(astNode, 'typed_array', args)
 
 class HalfLingNew(HalfLingNode):
 
@@ -487,7 +503,7 @@ class ASTRootNode(ASTNode):
 
     def getHalfLingDefaultInitializer(self, varType):
         if '*' in varType:
-            initializer = HalfLingJSFun(self, 'C.nullPointer', [])
+            initializer = HalfLingNullPointer(self)
         else:
             varType = self.resolveType(varType)
             #print 'resolve: ', varType
@@ -501,7 +517,7 @@ class ASTRootNode(ASTNode):
                     defaultValue = defaultValues[primType]
                     #initializer = 'C.fillArray(%s, %d)' % (defaultValue, arraySize)
                     args = [HVal(self, defaultValue), HVal(self, arraySize)]
-                    initializer = HalfLingJSFun(self, 'C.fillArray', args)
+                    initializer = HalfLingFillArray(self, args)
                 else:
                     if primType == '__va_list_tag':
                         args = [HalfLingRValueRef(self, primType)]
@@ -509,7 +525,7 @@ class ASTRootNode(ASTNode):
                     else:
                         assert primType != 'void'
                         args = [HalfLingRValueRef(self, primType), HVal(self, arraySize)]
-                        initializer = HalfLingJSFun(self, 'C.typedArray', args)
+                        initializer = HalfLingTypedArray(self, args)
             elif primType in defaultValues:
                 initializer = HVal(self, defaultValues[primType])
             else:
@@ -790,7 +806,7 @@ class CallExpr(ASTNode):
         fexprValue = fexpr.getValue()
         h.children = self.halfLingChildren()
         print 'fexprValue', fexprValue
-        if fexprValue in ['printf', 'puts']:
+        if fexprValue in ['printf', 'puts', 'time', 'malloc']:
             h.kind = 'jsfun'
             h.children[0] = fexprValue
         elif h.children[0].kind == 'ImplicitCastExpr':
@@ -967,6 +983,17 @@ class FloatingLiteral(ASTNode):
 class FormatAttr(ASTAttr): pass
 
 class ForStmt(ASTNode):
+    def halfLing(self):
+        h = HalfLingNode(self)
+        init, unknown, test, update, body = self.children
+        init = init.halfLing()
+        test = test.halfLing()
+        update = update.halfLing()
+        body = body.halfLing()
+        h.children = [init, test, update, body]
+        return h
+
+
     def getValue(self):
         init, unknown, test, update, body = self.children
         if unknown.kind != None:
@@ -1070,6 +1097,14 @@ class GNUInlineAttr(ASTAttr): pass
 class GotoStmt(ASTNode): pass
 class IfStmt(ASTNode):
 
+    def halfLing(self):
+        h = HalfLingNode(self)
+        test = self.children[1].halfLing()
+        body = self.children[2].halfLing()
+        elseClause = self.children[3].halfLing()
+        h.children = [test, body, elseClause]
+        return h
+
     def getValue(self):
         test = self.children[1].getValue()
         body = self.children[2].getValue()
@@ -1090,7 +1125,7 @@ class IfStmt(ASTNode):
 class ImplicitCastExpr(ASTNode):
     def halfLing(self):
         h = HalfLingNode(self)
-        if 'LValueToRValue' in self.line:
+        if 'LValueToRValue' in self.line or 'ArrayToPointerDecay' in self.line:
             h.info.l2r = True
         else:
             h.info.l2r = False
@@ -1104,6 +1139,39 @@ class ImplicitValueInitExpr(ASTNode): pass
 class IndirectFieldDecl(ASTNode): pass
 
 class InitListExpr(ASTNode):
+
+    def halfLing(self):
+        h = HalfLingNode(self)
+        h.children = self.halfLingChildren()
+        if self.children[0].kind == 'ASTArrayFiller':
+            varType = self.getVarType()
+            size = re.search('[0-9]+', varType).group(0)
+            size = int(size)
+            value = self.children[1].getValue()
+            try:
+                int(value)
+            except ValueError:
+                assert False, ("todo: implement other than int array filler: %s" % value)
+            args = [HVal(self, value), HVal(self, size)]
+            initializer = HalfLingFillArray(self, args)
+            return initializer
+        else:
+            varType = self.getVarType()
+            varType = self.root.resolveType(varType)
+            plainType = self.root.removeGeneralType(varType)
+            withoutLength = self.root.removeLengthSpecifier(plainType)
+            if 'anonymous' in plainType:
+                print 'TODO: anonymous list init'
+                assert False
+            # struct initialization, but not arrays
+            if (not plainType in defaultValues and
+                    not 'anonymous' in plainType and
+                    not withoutLength != plainType):
+                h = HalfLingNew(self, plainType, h.children)
+                return h
+            # regular array
+            else:
+                return h
 
     def getValue(self):
         if self.children[0].kind == 'ASTArrayFiller':
@@ -1133,6 +1201,15 @@ class InitListExpr(ASTNode):
                 return '_r2([ ' + self.getChildValues(', ').strip(', ') + ' ])\n'
 
 class IntegerLiteral(ASTNode):
+    def halfLing(self):
+        if self.parent.kind == "CStyleCastExpr" and 'NullToPointer' in self.parent.line:
+            h = HalfLingNullPointer(self)
+        else:
+            varName = self.getVarName()
+            h = HVal(self, int(varName))
+        return h
+
+
     def getValue(self):
         if self.parent.kind == "CStyleCastExpr" and 'NullToPointer' in self.parent.line:
             # null pointer
@@ -1397,9 +1474,10 @@ class StmtExpr(ASTNode):
 
 class StringLiteral(ASTNode):
     def halfLing(self):
+        h = HalfLingNode(self)
         value = self.getVarName()
-        value = HVal(self, value)
-        h = HalfLingJSFun(self, "_r3", [value])
+        h.children = [value]
+        #h = HalfLingJSFun(self, "_r3", [value])
         return h
 
     def getValue(self):
@@ -1439,6 +1517,40 @@ class TypedefDecl(ASTNode):
 
 class UnaryExprOrTypeTraitExpr(ASTNode):
 
+    def halfLing(self):
+        h = HalfLingNode(self)
+        h.children = self.halfLingChildren()
+        if 'sizeof' in self.line:
+            # case 1: inside alloc/malloc. whole call should be replace with "new Class(defaultValues)"
+            # case 2: else, size of array, call len
+            if len(self.children) > 1:
+                self.printParents()
+                assert False
+            tp = self.getLastVarType()
+            # sizeof array
+            if len(self.children) > 0:
+                #tp = child.getVarType()
+                #size = self.getBracketNum(tp)
+                return h
+            # sizeof struct
+            else:
+                child = None
+                expr = None
+                varType = self.root.resolveType(tp)
+                # We let records be the size number of their members.
+                # Hopefully this works :), since our records are subscriptable
+                # by integer index n corresponding to member number n.
+                if '*' in varType or varType.split(' ')[-1] in defaultValues:
+                    size = HVal(self, 1)
+                else:
+                    varType = self.root.removeGeneralType(varType)
+                    size = HVal(self.root.records[varType].size)
+                h.children = [size]
+                return h
+        else:
+            assert "Unknown UnaryExprOrTypeTraitExpr"
+
+
     def getValue(self):
         if 'sizeof' in self.line:
             # case 1: inside alloc/malloc. whole call should be replace with "new Class(defaultValues)"
@@ -1475,6 +1587,18 @@ class UnaryExprOrTypeTraitExpr(ASTNode):
 
 
 class UnaryOperator(ASTNode):
+
+    def halfLing(self):
+        assert len(self.children) == 1
+        h = HalfLingNode(self)
+        varType = self.getVarType()
+        operator = self.getOperator()
+        if '*' in varType:
+            h.info.ptr = True
+        h.children = [operator] + [x.halfLing() for x in self.children]
+        h.info.prefix = 'prefix' in self.line
+        h.info.postfix = 'postfix' in self.line
+        return h
 
     def getValue(self):
         assert len(self.children) == 1
@@ -1570,6 +1694,7 @@ class VarDecl(ASTNode):
             if not 'extern' in self.line:
                 if not self.declaredHalfLing:
                     self.declaredHalfLing = True
+                    h.children = [varName, child]
                 else:
                     varRef = HalfLingNode(self, 'DeclRefExpr', varName)
                     h = HalfLingNode(self, 'BinaryOperator', ['=', varRef, child])
