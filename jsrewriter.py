@@ -62,6 +62,7 @@ halfLingASTMap = {
         'FieldDecl': 'field',
         'typed_array': 'typed_array',
         'fill_array': 'fill_array',
+        'fill_string': 'fill_string',
         'null_ptr': 'null_ptr'
         }
 
@@ -196,6 +197,10 @@ class HalfLingNode(object):
 class HalfLingNullPointer(HalfLingNode):
     def __init__(self, astNode):
         super(HalfLingNullPointer, self).__init__(astNode, 'null_ptr', [])
+
+class HalfLingFillString(HalfLingNode):
+    def __init__(self, astNode, args):
+        super(HalfLingFillString, self).__init__(astNode, 'fill_string', args)
 
 class HalfLingFillArray(HalfLingNode):
     def __init__(self, astNode, args):
@@ -806,7 +811,34 @@ class CallExpr(ASTNode):
         fexprValue = fexpr.getValue()
         h.children = self.halfLingChildren()
         print 'fexprValue', fexprValue
-        if fexprValue in ['printf', 'puts', 'time', 'malloc']:
+        if fexprValue in ['malloc', 'alloc']:
+            if ((self.parent.kind == "CStyleCastExpr" or
+                self.parent.kind == "ImplicitCastExpr") and
+                not 'void' in self.parent.getVarType()):
+                varType = self.parent.getVarType()
+            else:
+                # Will be return type of alloc function, like char_u or void*,
+                # but looks like result is of same type.
+                varType = self.getVarType()
+            if '*' in varType:
+                primType = self.root.resolvePrimType(varType.strip(' *'))
+                sizeExpr = self.children[1].halfLing()
+                if primType in defaultValues:
+                    defaultValue = defaultValues[primType]
+                    if primType == 'char':
+                        args = [HVal(self, defaultValue), sizeExpr]
+                        initializer = HalfLingFillString(self, args)
+                    else:
+                        args = [HVal(self, defaultValue), sizeExpr]
+                        initializer = HalfLingFillArray(self, args)
+                else:
+                    assert primType != 'void'
+                    args = [HVal(self, defaultValue), sizeExpr]
+                    initializer = HalfLingTypedArray(self, args)
+            else:
+                initializer = self.root.getHalfLingDefaultInitializer(varType)
+            return initializer
+        if fexprValue in ['printf', 'puts', 'time']:
             h.kind = 'jsfun'
             h.children[0] = fexprValue
         elif h.children[0].kind == 'ImplicitCastExpr':
